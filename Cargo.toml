@@ -1,0 +1,17 @@
+[package]
+name = "permio-rust"
+version = "0.0.12"
+edition = "2021"
+description = "Generated Protocol Buffer and gRPC code for Permio"
+license = "Apache-2.0"
+repository = "https://github.com/PrivateJAR/permio-rust"
+homepage = "https://github.com/PrivateJAR/permio-rust"
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+tonic = "0.12"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+
+[lib]
+path = "src/lib.rs"
