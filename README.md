@@ -8,7 +8,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-permio-rust = { git = "https://github.com/PrivateJAR/permio-rust", tag = "v0.0.12" }
+permio-rust = { git = "https://github.com/PrivateJAR/permio-rust", tag = "v0.0.15" }
 ```
 
 ## Usage
@@ -27,4 +27,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Version
 
-v0.0.12
+v0.0.15

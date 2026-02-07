@@ -1,6 +1,6 @@
 [package]
 name = "permio-rust"
-version = "0.0.12"
+version = "0.0.15"
 edition = "2021"
 description = "Generated Protocol Buffer and gRPC code for Permio"
 license = "Apache-2.0"
