@@ -232,6 +232,11 @@ pub struct CreateApiKeyRequest {
     pub project_name: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub name: ::prost::alloc::string::String,
+    /// access is the level of access the new key gets on its project.
+    /// Unspecified is treated as API_KEY_ACCESS_CHECK. The caller must hold
+    /// every permission the chosen level grants.
+    #[prost(enumeration="ApiKeyAccess", tag="4")]
+    pub access: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ApiKey {
@@ -245,6 +250,10 @@ pub struct ApiKey {
     pub created_at: ::core::option::Option<::prost_types::Timestamp>,
     #[prost(bool, tag="5")]
     pub invalidated: bool,
+    /// access is the level of access the key has on its project. Unspecified
+    /// for keys whose level is not known.
+    #[prost(enumeration="ApiKeyAccess", tag="6")]
+    pub access: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateApiKeyResponse {
@@ -280,6 +289,41 @@ pub struct InvalidateApiKeyRequest {
     pub project_name: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub id: ::prost::alloc::string::String,
+}
+/// APIKeyAccess is the level of access an API key has on its project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ApiKeyAccess {
+    /// API_KEY_ACCESS_UNSPECIFIED is treated as API_KEY_ACCESS_CHECK.
+    Unspecified = 0,
+    /// API_KEY_ACCESS_CHECK can run permission checks and read permissions,
+    /// roles and principals (role apikey.checker).
+    Check = 1,
+    /// API_KEY_ACCESS_FULL can also create, update and delete permissions and
+    /// roles, and assign and revoke grants (role apikey.manager).
+    Full = 2,
+}
+impl ApiKeyAccess {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "API_KEY_ACCESS_UNSPECIFIED",
+            Self::Check => "API_KEY_ACCESS_CHECK",
+            Self::Full => "API_KEY_ACCESS_FULL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "API_KEY_ACCESS_UNSPECIFIED" => Some(Self::Unspecified),
+            "API_KEY_ACCESS_CHECK" => Some(Self::Check),
+            "API_KEY_ACCESS_FULL" => Some(Self::Full),
+            _ => None,
+        }
+    }
 }
 include!("permio.organisation.v1.tonic.rs");
 // @@protoc_insertion_point(module)

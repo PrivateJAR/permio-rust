@@ -257,7 +257,7 @@ pub struct CreateRoleRequest {
     /// project_name is the name of the project that the role belongs to.
     #[prost(string, tag="1")]
     pub project_name: ::prost::alloc::string::String,
-    /// Name is the name of the role.
+    /// Name is the name of the role. Control characters are not allowed.
     #[prost(string, tag="2")]
     pub name: ::prost::alloc::string::String,
     /// Description is the description of the role.
@@ -306,7 +306,7 @@ pub struct UpdateRoleRequest {
     /// id is the unique identifier of the role.
     #[prost(string, tag="2")]
     pub id: ::prost::alloc::string::String,
-    /// name is the name of the role.
+    /// name is the name of the role. Control characters are not allowed.
     #[prost(string, tag="3")]
     pub name: ::prost::alloc::string::String,
     /// Description is the description of the role.
@@ -359,6 +359,405 @@ pub struct PrincipalCountUpdatedEvent {
     /// UniquePrincipalCount is the new number of unique principals in the organisation.
     #[prost(int64, tag="2")]
     pub unique_principal_count: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BatchCheckRequest {
+    /// project_name is the name of the project to check permissions in.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// principal_id is the unique identifier of the principal.
+    #[prost(string, tag="2")]
+    pub principal_id: ::prost::alloc::string::String,
+    /// resource_uris are the URIs of the resources to check, with the same rules as CheckPermissionRequest.resource_uris.
+    #[prost(string, repeated, tag="3")]
+    pub resource_uris: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// permissions are the permission names the principal should have on every resource.
+    #[prost(string, repeated, tag="4")]
+    pub permissions: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BatchCheckResponse {
+    /// results has one entry per requested resource URI, in request order.
+    #[prost(message, repeated, tag="1")]
+    pub results: ::prost::alloc::vec::Vec<BatchCheckResult>,
+}
+/// BatchCheckResult is the result of checking one resource URI.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BatchCheckResult {
+    #[prost(string, tag="1")]
+    pub resource_uri: ::prost::alloc::string::String,
+    /// allowed is true if the principal has every requested permission on resource_uri.
+    #[prost(bool, tag="2")]
+    pub allowed: bool,
+    /// missing_permissions are the requested permissions the principal does not have on resource_uri, in request order.
+    #[prost(string, repeated, tag="3")]
+    pub missing_permissions: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListAccessRequest {
+    /// project_name is the name of the project to look in.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// principal_id is the unique identifier of the principal.
+    #[prost(string, tag="2")]
+    pub principal_id: ::prost::alloc::string::String,
+    /// permission is the name of the permission to look for.
+    #[prost(string, tag="3")]
+    pub permission: ::prost::alloc::string::String,
+    /// under_uri limits the answer to under_uri and the resources below it. A "_" segment in under_uri is literal.
+    #[prost(string, tag="4")]
+    pub under_uri: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListAccessResponse {
+    /// covers_all is true if the principal holds the permission on under_uri itself and therefore on everything below
+    /// it. scopes is then a single SUBTREE scope for under_uri and there are no further pages.
+    #[prost(bool, tag="1")]
+    pub covers_all: bool,
+    /// scopes are the places at or below under_uri where the principal holds the permission, ordered by uri.
+    #[prost(message, repeated, tag="2")]
+    pub scopes: ::prost::alloc::vec::Vec<AccessScope>,
+    #[prost(message, optional, tag="3")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationResponse>,
+}
+/// AccessScope is a set of resources on which a principal holds a permission.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AccessScope {
+    /// uri is the resource URI (SUBTREE, EXACT) or URI pattern (PATTERN) of the scope. For a grant below under_uri it is
+    /// the URI the grant was made on, which may have "_" segments in the part that matches under_uri.
+    #[prost(string, tag="1")]
+    pub uri: ::prost::alloc::string::String,
+    /// scope says which resources uri stands for.
+    #[prost(enumeration="AccessScopeKind", tag="2")]
+    pub scope: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListPrincipalsWithAccessRequest {
+    /// project_name is the name of the project to look in.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// resource_uri is the resource to look at. A "_" segment in resource_uri is literal.
+    #[prost(string, tag="2")]
+    pub resource_uri: ::prost::alloc::string::String,
+    /// permission, when set, only counts grants that confer this permission. When unset every grant with at least one
+    /// direct permission or role counts.
+    #[prost(string, optional, tag="3")]
+    pub permission: ::core::option::Option<::prost::alloc::string::String>,
+    /// expand_groups also lists the members of every listed group, with via_group set.
+    #[prost(bool, tag="4")]
+    pub expand_groups: bool,
+    #[prost(message, optional, tag="5")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListPrincipalsWithAccessResponse {
+    #[prost(message, repeated, tag="1")]
+    pub principals: ::prost::alloc::vec::Vec<PrincipalAccess>,
+    #[prost(message, optional, tag="2")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationResponse>,
+}
+/// PrincipalAccess is one principal with access to a resource, and the grants that give it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrincipalAccess {
+    #[prost(string, tag="1")]
+    pub principal_id: ::prost::alloc::string::String,
+    /// is_group is true if principal_id is a group ("group:{name}").
+    #[prost(bool, tag="2")]
+    pub is_group: bool,
+    /// via_group is the name of the group through which principal_id holds the grants in via, when the entry comes from
+    /// expand_groups. It is empty for grants made to principal_id itself.
+    #[prost(string, tag="3")]
+    pub via_group: ::prost::alloc::string::String,
+    /// via are the grants that give the access, most specific first.
+    #[prost(message, repeated, tag="4")]
+    pub via: ::prost::alloc::vec::Vec<AccessGrant>,
+}
+/// AccessGrant is one grant (or one role within a grant) that gives a principal access to a resource.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AccessGrant {
+    /// resource_uri is the URI the grant was made on: the resource itself, an ancestor, or a URI with stored "_"
+    /// wildcard segments that match it.
+    #[prost(string, tag="1")]
+    pub resource_uri: ::prost::alloc::string::String,
+    /// inherited is true if resource_uri is not exactly the resource, i.e. match is ANCESTOR or WILDCARD.
+    #[prost(bool, tag="2")]
+    pub inherited: bool,
+    #[prost(enumeration="AccessGrantMatch", tag="3")]
+    pub r#match: i32,
+    /// source is how the grant gives the access: through a role, or as directly granted permissions.
+    #[prost(oneof="access_grant::Source", tags="4, 5")]
+    pub source: ::core::option::Option<access_grant::Source>,
+}
+/// Nested message and enum types in `AccessGrant`.
+pub mod access_grant {
+    /// source is how the grant gives the access: through a role, or as directly granted permissions.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Source {
+        #[prost(message, tag="4")]
+        Role(super::AccessGrantRole),
+        #[prost(message, tag="5")]
+        Direct(super::AccessGrantDirect),
+    }
+}
+/// AccessGrantRole identifies the role through which a grant gives access.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AccessGrantRole {
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+}
+/// AccessGrantDirect marks access given by directly granted permissions rather than a role.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AccessGrantDirect {
+}
+/// a Group is a named set of principals in a project. Grants made to the principal ID "group:{name}" apply to every
+/// member. Groups count towards nothing in billing; their members count as unique principals.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Group {
+    /// ID is the unique identifier of the group.
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+    /// OrganisationID is the unique identifier of the organisation that owns the group.
+    #[prost(string, tag="2")]
+    pub organisation_id: ::prost::alloc::string::String,
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="3")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug, unique within the project. It cannot be changed.
+    #[prost(string, tag="4")]
+    pub name: ::prost::alloc::string::String,
+    /// description is the description of the group.
+    #[prost(string, tag="5")]
+    pub description: ::prost::alloc::string::String,
+    /// principal_id is the principal ID that grants to this group are made to: "group:{name}".
+    #[prost(string, tag="6")]
+    pub principal_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="7")]
+    pub created_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag="8")]
+    pub updated_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CreateGroupRequest {
+    /// project_name is the name of the project that the group will belong to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug: lower-case letters, digits and hyphens.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    /// description is the description of the group.
+    #[prost(string, tag="3")]
+    pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetGroupRequest {
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UpdateGroupRequest {
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    /// description replaces the group's description.
+    #[prost(string, tag="3")]
+    pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteGroupRequest {
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListGroupsRequest {
+    /// project_name is the name of the project that the groups belong to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationRequest>,
+    /// search is a search string to filter the groups by name.
+    #[prost(string, optional, tag="3")]
+    pub search: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListGroupsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub groups: ::prost::alloc::vec::Vec<Group>,
+    #[prost(message, optional, tag="2")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddGroupMembersRequest {
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    /// principal_ids are the principals to add. They may not start with "group:".
+    #[prost(string, repeated, tag="3")]
+    pub principal_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AddGroupMembersResponse {
+    /// added_principal_ids are the principals that were added, in request order.
+    #[prost(string, repeated, tag="1")]
+    pub added_principal_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// existing_principal_ids are the principals that were already members, in request order.
+    #[prost(string, repeated, tag="2")]
+    pub existing_principal_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveGroupMembersRequest {
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    /// principal_ids are the principals to remove.
+    #[prost(string, repeated, tag="3")]
+    pub principal_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoveGroupMembersResponse {
+    /// removed_principal_ids are the principals that were removed, in request order.
+    #[prost(string, repeated, tag="1")]
+    pub removed_principal_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// not_member_principal_ids are the principals that were not members, in request order.
+    #[prost(string, repeated, tag="2")]
+    pub not_member_principal_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListGroupMembersRequest {
+    /// project_name is the name of the project that the group belongs to.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// name is the group's slug.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationRequest>,
+}
+/// GroupMember is one member of a group.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GroupMember {
+    #[prost(string, tag="1")]
+    pub principal_id: ::prost::alloc::string::String,
+    /// created_at is when the principal was added to the group.
+    #[prost(message, optional, tag="2")]
+    pub created_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListGroupMembersResponse {
+    #[prost(message, repeated, tag="1")]
+    pub members: ::prost::alloc::vec::Vec<GroupMember>,
+    #[prost(message, optional, tag="2")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListGroupsForPrincipalRequest {
+    /// project_name is the name of the project to look in.
+    #[prost(string, tag="1")]
+    pub project_name: ::prost::alloc::string::String,
+    /// principal_id is the unique identifier of the principal.
+    #[prost(string, tag="2")]
+    pub principal_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationRequest>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListGroupsForPrincipalResponse {
+    #[prost(message, repeated, tag="1")]
+    pub groups: ::prost::alloc::vec::Vec<Group>,
+    #[prost(message, optional, tag="2")]
+    pub pagination: ::core::option::Option<super::super::super::pagination::PaginationResponse>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AccessScopeKind {
+    Unspecified = 0,
+    /// Exactly the resource uri. Grants are inherited by every resource below the granted one, so the current model
+    /// never returns EXACT; it is reserved for non-inheritable grants.
+    Exact = 1,
+    /// The resource uri and every resource below it.
+    Subtree = 2,
+    /// Every resource whose leading segments match uri, where each "_" segment of uri matches exactly one segment, and
+    /// every resource below those.
+    Pattern = 3,
+}
+impl AccessScopeKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ACCESS_SCOPE_KIND_UNSPECIFIED",
+            Self::Exact => "ACCESS_SCOPE_KIND_EXACT",
+            Self::Subtree => "ACCESS_SCOPE_KIND_SUBTREE",
+            Self::Pattern => "ACCESS_SCOPE_KIND_PATTERN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ACCESS_SCOPE_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "ACCESS_SCOPE_KIND_EXACT" => Some(Self::Exact),
+            "ACCESS_SCOPE_KIND_SUBTREE" => Some(Self::Subtree),
+            "ACCESS_SCOPE_KIND_PATTERN" => Some(Self::Pattern),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AccessGrantMatch {
+    Unspecified = 0,
+    /// The grant was made on exactly the resource.
+    Exact = 1,
+    /// The grant was made on an ancestor of the resource (possibly with "_" wildcard segments).
+    Ancestor = 2,
+    /// The grant was made at the same depth as the resource, but one or more of its segments is the "_" wildcard.
+    Wildcard = 3,
+}
+impl AccessGrantMatch {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ACCESS_GRANT_MATCH_UNSPECIFIED",
+            Self::Exact => "ACCESS_GRANT_MATCH_EXACT",
+            Self::Ancestor => "ACCESS_GRANT_MATCH_ANCESTOR",
+            Self::Wildcard => "ACCESS_GRANT_MATCH_WILDCARD",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ACCESS_GRANT_MATCH_UNSPECIFIED" => Some(Self::Unspecified),
+            "ACCESS_GRANT_MATCH_EXACT" => Some(Self::Exact),
+            "ACCESS_GRANT_MATCH_ANCESTOR" => Some(Self::Ancestor),
+            "ACCESS_GRANT_MATCH_WILDCARD" => Some(Self::Wildcard),
+            _ => None,
+        }
+    }
 }
 include!("permio.permissions.v1.tonic.rs");
 // @@protoc_insertion_point(module)

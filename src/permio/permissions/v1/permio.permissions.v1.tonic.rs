@@ -558,6 +558,342 @@ pub mod permissions_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn batch_check(
+            &mut self,
+            request: impl tonic::IntoRequest<super::BatchCheckRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BatchCheckResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/BatchCheck",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "BatchCheck",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn list_access(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListAccessRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListAccessResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/ListAccess",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "ListAccess",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn list_principals_with_access(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListPrincipalsWithAccessRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPrincipalsWithAccessResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/ListPrincipalsWithAccess",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "ListPrincipalsWithAccess",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn create_group(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/CreateGroup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "CreateGroup",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_group(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/GetGroup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "GetGroup",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn update_group(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpdateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/UpdateGroup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "UpdateGroup",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn delete_group(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteGroupRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/DeleteGroup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "DeleteGroup",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn list_groups(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListGroupsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListGroupsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/ListGroups",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "ListGroups",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn add_group_members(
+            &mut self,
+            request: impl tonic::IntoRequest<super::AddGroupMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AddGroupMembersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/AddGroupMembers",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "AddGroupMembers",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn remove_group_members(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RemoveGroupMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RemoveGroupMembersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/RemoveGroupMembers",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "RemoveGroupMembers",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn list_group_members(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListGroupMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListGroupMembersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/ListGroupMembers",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "ListGroupMembers",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn list_groups_for_principal(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListGroupsForPrincipalRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListGroupsForPrincipalResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/ListGroupsForPrincipal",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "permio.permissions.v1.PermissionsService",
+                        "ListGroupsForPrincipal",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -664,6 +1000,78 @@ pub mod permissions_service_server {
             >,
         ) -> std::result::Result<
             tonic::Response<super::GetTotalRolesAndPermissionsForOrganisationResponse>,
+            tonic::Status,
+        >;
+        async fn batch_check(
+            &self,
+            request: tonic::Request<super::BatchCheckRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BatchCheckResponse>,
+            tonic::Status,
+        >;
+        async fn list_access(
+            &self,
+            request: tonic::Request<super::ListAccessRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListAccessResponse>,
+            tonic::Status,
+        >;
+        async fn list_principals_with_access(
+            &self,
+            request: tonic::Request<super::ListPrincipalsWithAccessRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPrincipalsWithAccessResponse>,
+            tonic::Status,
+        >;
+        async fn create_group(
+            &self,
+            request: tonic::Request<super::CreateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status>;
+        async fn get_group(
+            &self,
+            request: tonic::Request<super::GetGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status>;
+        async fn update_group(
+            &self,
+            request: tonic::Request<super::UpdateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status>;
+        async fn delete_group(
+            &self,
+            request: tonic::Request<super::DeleteGroupRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
+        async fn list_groups(
+            &self,
+            request: tonic::Request<super::ListGroupsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListGroupsResponse>,
+            tonic::Status,
+        >;
+        async fn add_group_members(
+            &self,
+            request: tonic::Request<super::AddGroupMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AddGroupMembersResponse>,
+            tonic::Status,
+        >;
+        async fn remove_group_members(
+            &self,
+            request: tonic::Request<super::RemoveGroupMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RemoveGroupMembersResponse>,
+            tonic::Status,
+        >;
+        async fn list_group_members(
+            &self,
+            request: tonic::Request<super::ListGroupMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListGroupMembersResponse>,
+            tonic::Status,
+        >;
+        async fn list_groups_for_principal(
+            &self,
+            request: tonic::Request<super::ListGroupsForPrincipalRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListGroupsForPrincipalResponse>,
             tonic::Status,
         >;
     }
@@ -1566,6 +1974,576 @@ pub mod permissions_service_server {
                         let method = GetTotalRolesAndPermissionsForOrganisationSvc(
                             inner,
                         );
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/BatchCheck" => {
+                    #[allow(non_camel_case_types)]
+                    struct BatchCheckSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::BatchCheckRequest>
+                    for BatchCheckSvc<T> {
+                        type Response = super::BatchCheckResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::BatchCheckRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::batch_check(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = BatchCheckSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/ListAccess" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListAccessSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::ListAccessRequest>
+                    for ListAccessSvc<T> {
+                        type Response = super::ListAccessResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListAccessRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::list_access(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListAccessSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/ListPrincipalsWithAccess" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListPrincipalsWithAccessSvc<T: PermissionsService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::ListPrincipalsWithAccessRequest>
+                    for ListPrincipalsWithAccessSvc<T> {
+                        type Response = super::ListPrincipalsWithAccessResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListPrincipalsWithAccessRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::list_principals_with_access(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListPrincipalsWithAccessSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/CreateGroup" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateGroupSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::CreateGroupRequest>
+                    for CreateGroupSvc<T> {
+                        type Response = super::Group;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateGroupRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::create_group(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateGroupSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/GetGroup" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetGroupSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::GetGroupRequest>
+                    for GetGroupSvc<T> {
+                        type Response = super::Group;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetGroupRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::get_group(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetGroupSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/UpdateGroup" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpdateGroupSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::UpdateGroupRequest>
+                    for UpdateGroupSvc<T> {
+                        type Response = super::Group;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UpdateGroupRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::update_group(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpdateGroupSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/DeleteGroup" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteGroupSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::DeleteGroupRequest>
+                    for DeleteGroupSvc<T> {
+                        type Response = ();
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteGroupRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::delete_group(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteGroupSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/ListGroups" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListGroupsSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::ListGroupsRequest>
+                    for ListGroupsSvc<T> {
+                        type Response = super::ListGroupsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListGroupsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::list_groups(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListGroupsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/AddGroupMembers" => {
+                    #[allow(non_camel_case_types)]
+                    struct AddGroupMembersSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::AddGroupMembersRequest>
+                    for AddGroupMembersSvc<T> {
+                        type Response = super::AddGroupMembersResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::AddGroupMembersRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::add_group_members(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = AddGroupMembersSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/RemoveGroupMembers" => {
+                    #[allow(non_camel_case_types)]
+                    struct RemoveGroupMembersSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::RemoveGroupMembersRequest>
+                    for RemoveGroupMembersSvc<T> {
+                        type Response = super::RemoveGroupMembersResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::RemoveGroupMembersRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::remove_group_members(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RemoveGroupMembersSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/ListGroupMembers" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListGroupMembersSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::ListGroupMembersRequest>
+                    for ListGroupMembersSvc<T> {
+                        type Response = super::ListGroupMembersResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListGroupMembersRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::list_group_members(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListGroupMembersSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/ListGroupsForPrincipal" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListGroupsForPrincipalSvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::ListGroupsForPrincipalRequest>
+                    for ListGroupsForPrincipalSvc<T> {
+                        type Response = super::ListGroupsForPrincipalResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListGroupsForPrincipalRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::list_groups_for_principal(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListGroupsForPrincipalSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
