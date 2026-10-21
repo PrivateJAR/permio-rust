@@ -9,7 +9,7 @@ This repository is generated from `PrivateJAR/proto` on every release. Do not ed
 
 ```toml
 [dependencies]
-permio-rust = { git = "https://github.com/PrivateJAR/permio-rust", tag = "v0.0.16", features = ["tls"] }
+permio-rust = { git = "https://github.com/PrivateJAR/permio-rust", tag = "v0.0.17", features = ["tls"] }
 ```
 
 ## Usage
@@ -24,4 +24,4 @@ See [`examples/client.rs`](examples/client.rs) for an authenticated client
 
 ## Version
 
-v0.0.16
+v0.0.17

@@ -894,6 +894,29 @@ pub mod permissions_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn who_am_i(
+            &mut self,
+            request: impl tonic::IntoRequest<super::WhoAmIRequest>,
+        ) -> std::result::Result<tonic::Response<super::WhoAmIResponse>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/permio.permissions.v1.PermissionsService/WhoAmI",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("permio.permissions.v1.PermissionsService", "WhoAmI"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -1074,6 +1097,10 @@ pub mod permissions_service_server {
             tonic::Response<super::ListGroupsForPrincipalResponse>,
             tonic::Status,
         >;
+        async fn who_am_i(
+            &self,
+            request: tonic::Request<super::WhoAmIRequest>,
+        ) -> std::result::Result<tonic::Response<super::WhoAmIResponse>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct PermissionsServiceServer<T> {
@@ -2544,6 +2571,51 @@ pub mod permissions_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListGroupsForPrincipalSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/permio.permissions.v1.PermissionsService/WhoAmI" => {
+                    #[allow(non_camel_case_types)]
+                    struct WhoAmISvc<T: PermissionsService>(pub Arc<T>);
+                    impl<
+                        T: PermissionsService,
+                    > tonic::server::UnaryService<super::WhoAmIRequest>
+                    for WhoAmISvc<T> {
+                        type Response = super::WhoAmIResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::WhoAmIRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PermissionsService>::who_am_i(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = WhoAmISvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
