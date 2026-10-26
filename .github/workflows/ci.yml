@@ -1,0 +1,86 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  lint:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: useblacksmith/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+  test:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: useblacksmith/checkout@v1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all-targets
+      # tests/live.rs skips itself here: PERMIO_API_KEY is not set in this job.
+      - run: cargo test
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+      - name: Package (what crates.io would receive)
+        run: |
+          cargo package --list
+          cargo package
+
+  msrv:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: useblacksmith/checkout@v1
+      # Keep in sync with rust-version in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+
+  # Runs tests/live.rs against the dev API (DEV_ENDPOINT) when the
+  # PERMIO_DEV_API_KEY secret is available, and is skipped otherwise (for
+  # example on pull requests from forks). The test writes fixed sdk-it-rust-*
+  # IDs, so runs are serialised.
+  integration:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    concurrency:
+      group: permio-rust-integration
+      cancel-in-progress: false
+    steps:
+      - name: Check for the dev API key
+        id: key
+        env:
+          HAS_KEY: ${{ secrets.PERMIO_DEV_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::notice::PERMIO_DEV_API_KEY is not available; skipping the integration test."
+          fi
+          echo "enabled=$HAS_KEY" >> "$GITHUB_OUTPUT"
+      - uses: useblacksmith/checkout@v1
+        if: steps.key.outputs.enabled == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.key.outputs.enabled == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.key.outputs.enabled == 'true'
+      - name: Integration test against the dev API
+        if: steps.key.outputs.enabled == 'true'
+        env:
+          PERMIO_API_KEY: ${{ secrets.PERMIO_DEV_API_KEY }}
+        run: |
+          cargo test --test live -- --nocapture 2>&1 | tee live.log
+          # Fail if the suite skipped itself rather than ran.
+          grep -q "bad key ok" live.log || { echo "integration test did not run"; exit 1; }
