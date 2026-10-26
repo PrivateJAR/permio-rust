@@ -12,6 +12,10 @@ pub struct RemoveUserFromOrganisationRequest {
 pub struct GetOrganisationDashboardRequest {
     #[prost(string, tag="1")]
     pub organisation_id: ::prost::alloc::string::String,
+    /// project scopes the role, permission and principal totals to one project. Empty means the whole organisation.
+    /// total_users is always organisation-wide.
+    #[prost(string, tag="2")]
+    pub project: ::prost::alloc::string::String,
 }
 /// Response for organisation dashboard info
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

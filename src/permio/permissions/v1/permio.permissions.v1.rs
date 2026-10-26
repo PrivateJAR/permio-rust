@@ -6,16 +6,24 @@ pub struct GetTotalRolesAndPermissionsForOrganisationRequest {
     /// organisation_id is the organisation to count in. It must be the caller's organisation.
     #[prost(string, tag="1")]
     pub organisation_id: ::prost::alloc::string::String,
+    /// project limits the totals to one project. Empty counts across all of the organisation's projects.
+    #[prost(string, tag="2")]
+    pub project: ::prost::alloc::string::String,
 }
-/// GetTotalRolesAndPermissionsForOrganisationResponse holds the organisation's totals across all its projects.
+/// GetTotalRolesAndPermissionsForOrganisationResponse holds the organisation's totals, across all its projects or for
+/// the requested project.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTotalRolesAndPermissionsForOrganisationResponse {
-    /// total_roles is the number of roles in the organisation.
+    /// total_roles is the number of roles.
     #[prost(int32, tag="1")]
     pub total_roles: i32,
-    /// total_permissions is the number of permissions in the organisation.
+    /// total_permissions is the number of permissions.
     #[prost(int32, tag="2")]
     pub total_permissions: i32,
+    /// total_principals is the number of distinct principals with a grant (excluding group principals) or a group
+    /// membership. It is only set when project is set; the organisation-wide count is the billed one.
+    #[prost(int32, tag="3")]
+    pub total_principals: i32,
 }
 /// ListRolesRequest is the request of ListRoles.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
