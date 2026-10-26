@@ -1,6 +1,8 @@
 //! Groups of principals.
 
-use crate::client::Client;
+use std::time::Duration;
+
+use crate::client::{request, Client};
 use crate::error::Error;
 use crate::list::{failed, paginate, ListOptions, ListStream};
 use crate::raw::permissions::v1 as pb;
@@ -81,6 +83,7 @@ where
 
 /// Result of [`Groups::add_members`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AddMembersResult {
     /// Principals that were added, in request order.
     pub added: Vec<String>,
@@ -90,6 +93,7 @@ pub struct AddMembersResult {
 
 /// Result of [`Groups::remove_members`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct RemoveMembersResult {
     /// Principals that were removed, in request order.
     pub removed: Vec<String>,
@@ -102,16 +106,67 @@ pub struct RemoveMembersResult {
 /// holds the grant. Groups cannot contain groups.
 ///
 /// Every method that takes a group accepts its slug (`"editors"`) or its
-/// principal ID (`"group:editors"`). Calls use the client's default project;
-/// use [`Client::with_project`] for another one.
+/// principal ID (`"group:editors"`).
+///
+/// Calls use the client's default project and timeouts. `Groups` is a cheap
+/// handle, so set them per call with [`project`](Self::project) and
+/// [`timeout`](Self::timeout):
+///
+/// ```no_run
+/// # async fn demo(client: permio::Client) -> Result<(), permio::Error> {
+/// use std::time::Duration;
+/// client
+///     .groups()
+///     .project("other-app")
+///     .timeout(Duration::from_secs(3))
+///     .delete("editors")
+///     .await?;
+/// # Ok(()) }
+/// ```
+///
+/// For the list methods, [`ListOptions::project`] and
+/// [`ListOptions::timeout`] take precedence over these.
 #[derive(Debug, Clone)]
 pub struct Groups {
     client: Client,
+    project: Option<String>,
+    timeout: Option<Duration>,
 }
 
 impl Groups {
     pub(crate) fn new(client: Client) -> Self {
-        Groups { client }
+        Groups {
+            client,
+            project: None,
+            timeout: None,
+        }
+    }
+
+    /// The same handle, sending calls to `project` instead of the client's
+    /// default project.
+    #[must_use]
+    pub fn project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+
+    /// The same handle, with an overall deadline per call across retries
+    /// (for list streams: per page request). Overrides the client's
+    /// [`call_timeout`](crate::ClientBuilder::call_timeout);
+    /// [`Duration::ZERO`] means none.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    fn resolve_project(&self, project: Option<&str>) -> Result<String, Error> {
+        self.client
+            .resolve_project(project.or(self.project.as_deref()))
+    }
+
+    fn request<T>(&self, message: T) -> tonic::Request<T> {
+        request(message, self.timeout)
     }
 
     /// Creates a group.
@@ -123,10 +178,15 @@ impl Groups {
     pub async fn create(&self, name: &str, description: Option<&str>) -> Result<pb::Group, Error> {
         let req = pb::CreateGroupRequest {
             name: slug_of(name)?,
-            project_name: self.client.resolve_project(None)?,
+            project_name: self.resolve_project(None)?,
             description: description.unwrap_or_default().to_string(),
         };
-        Ok(self.client.rpc().create_group(req).await?.into_inner())
+        Ok(self
+            .client
+            .rpc()
+            .create_group(self.request(req))
+            .await?
+            .into_inner())
     }
 
     /// Returns a group.
@@ -137,9 +197,14 @@ impl Groups {
     pub async fn get(&self, name: &str) -> Result<pb::Group, Error> {
         let req = pb::GetGroupRequest {
             name: slug_of(name)?,
-            project_name: self.client.resolve_project(None)?,
+            project_name: self.resolve_project(None)?,
         };
-        Ok(self.client.rpc().get_group(req).await?.into_inner())
+        Ok(self
+            .client
+            .rpc()
+            .get_group(self.request(req))
+            .await?
+            .into_inner())
     }
 
     /// Replaces a group's description. A group's name cannot be changed.
@@ -150,10 +215,15 @@ impl Groups {
     pub async fn update(&self, name: &str, description: &str) -> Result<pb::Group, Error> {
         let req = pb::UpdateGroupRequest {
             name: slug_of(name)?,
-            project_name: self.client.resolve_project(None)?,
+            project_name: self.resolve_project(None)?,
             description: description.to_string(),
         };
-        Ok(self.client.rpc().update_group(req).await?.into_inner())
+        Ok(self
+            .client
+            .rpc()
+            .update_group(self.request(req))
+            .await?
+            .into_inner())
     }
 
     /// Deletes a group, its memberships and every grant made to it. Succeeds
@@ -165,27 +235,31 @@ impl Groups {
     pub async fn delete(&self, name: &str) -> Result<(), Error> {
         let req = pb::DeleteGroupRequest {
             name: slug_of(name)?,
-            project_name: self.client.resolve_project(None)?,
+            project_name: self.resolve_project(None)?,
         };
-        self.client.rpc().delete_group(req).await?;
+        self.client.rpc().delete_group(self.request(req)).await?;
         Ok(())
     }
 
     /// Streams every group in the project, ordered by name.
     pub fn list(&self, options: ListOptions) -> ListStream<pb::Group> {
-        let project_name = match self.client.resolve_project(None) {
+        let project_name = match self.resolve_project(options.project.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         };
         let rpc = self.client.rpc();
         let limit = options.limit().unsigned_abs();
+        let timeout = options.timeout.or(self.timeout);
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListGroupsRequest {
-                project_name: project_name.clone(),
-                pagination: Some(pagination),
-                search: options.search.clone(),
-            };
+            let req = request(
+                pb::ListGroupsRequest {
+                    project_name: project_name.clone(),
+                    pagination: Some(pagination),
+                    search: options.search.clone(),
+                },
+                timeout,
+            );
             async move {
                 let res = rpc.list_groups(req).await?.into_inner();
                 Ok((res.groups, res.pagination))
@@ -218,11 +292,16 @@ impl Groups {
             return Err(Error::validation("permio: groups cannot contain groups"));
         }
         let req = pb::AddGroupMembersRequest {
-            project_name: self.client.resolve_project(None)?,
+            project_name: self.resolve_project(None)?,
             name,
             principal_ids,
         };
-        let res = self.client.rpc().add_group_members(req).await?.into_inner();
+        let res = self
+            .client
+            .rpc()
+            .add_group_members(self.request(req))
+            .await?
+            .into_inner();
         Ok(AddMembersResult {
             added: res.added_principal_ids,
             existing: res.existing_principal_ids,
@@ -247,12 +326,12 @@ impl Groups {
         let req = pb::RemoveGroupMembersRequest {
             name: slug_of(name)?,
             principal_ids: principal_list(principals)?,
-            project_name: self.client.resolve_project(None)?,
+            project_name: self.resolve_project(None)?,
         };
         let res = self
             .client
             .rpc()
-            .remove_group_members(req)
+            .remove_group_members(self.request(req))
             .await?
             .into_inner();
         Ok(RemoveMembersResult {
@@ -263,20 +342,25 @@ impl Groups {
 
     /// Streams a group's members, ordered by principal ID.
     pub fn list_members(&self, name: &str, options: ListOptions) -> ListStream<pb::GroupMember> {
-        let (name, project_name) =
-            match slug_of(name).and_then(|n| Ok((n, self.client.resolve_project(None)?))) {
-                Ok(v) => v,
-                Err(e) => return failed(e),
-            };
+        let (name, project_name) = match slug_of(name)
+            .and_then(|n| Ok((n, self.resolve_project(options.project.as_deref())?)))
+        {
+            Ok(v) => v,
+            Err(e) => return failed(e),
+        };
         let rpc = self.client.rpc();
         let limit = options.limit().unsigned_abs();
+        let timeout = options.timeout.or(self.timeout);
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListGroupMembersRequest {
-                project_name: project_name.clone(),
-                name: name.clone(),
-                pagination: Some(pagination),
-            };
+            let req = request(
+                pb::ListGroupMembersRequest {
+                    project_name: project_name.clone(),
+                    name: name.clone(),
+                    pagination: Some(pagination),
+                },
+                timeout,
+            );
             async move {
                 let res = rpc.list_group_members(req).await?.into_inner();
                 Ok((res.members, res.pagination))
@@ -293,20 +377,24 @@ impl Groups {
         if principal.is_empty() {
             return failed(Error::validation("permio: principal is required"));
         }
-        let project_name = match self.client.resolve_project(None) {
+        let project_name = match self.resolve_project(options.project.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         };
         let rpc = self.client.rpc();
         let principal = principal.to_string();
         let limit = options.limit().unsigned_abs();
+        let timeout = options.timeout.or(self.timeout);
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListGroupsForPrincipalRequest {
-                project_name: project_name.clone(),
-                principal_id: principal.clone(),
-                pagination: Some(pagination),
-            };
+            let req = request(
+                pb::ListGroupsForPrincipalRequest {
+                    project_name: project_name.clone(),
+                    principal_id: principal.clone(),
+                    pagination: Some(pagination),
+                },
+                timeout,
+            );
             async move {
                 let res = rpc.list_groups_for_principal(req).await?.into_inner();
                 Ok((res.groups, res.pagination))

@@ -6,11 +6,27 @@ use tonic::{Code, Status};
 
 /// Permissions missing on one resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct MissingPermission {
     /// The resource URI the permissions are missing on.
     pub resource: String,
     /// The permission names the principal does not hold on `resource`.
     pub permissions: Vec<String>,
+}
+
+impl MissingPermission {
+    /// `permissions` missing on `resource`.
+    #[must_use]
+    pub fn new<I, S>(resource: impl Into<String>, permissions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        MissingPermission {
+            resource: resource.into(),
+            permissions: permissions.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// Every error returned by the SDK.
@@ -20,12 +36,17 @@ pub struct MissingPermission {
 /// an error: [`Client::check`](crate::Client::check) returns `false`, and only
 /// [`Client::assert`](crate::Client::assert) turns a denial into
 /// [`Error::Denied`].
+///
+/// The enum and each variant are `#[non_exhaustive]`: match variants with
+/// `..` and keep a wildcard arm, so new kinds and fields can be added in minor
+/// releases.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// The client was configured incorrectly, e.g. a malformed API key, a
     /// missing project or an invalid endpoint.
     #[error("{message}")]
+    #[non_exhaustive]
     Config {
         /// What is wrong.
         message: String,
@@ -34,6 +55,7 @@ pub enum Error {
     /// The API key was missing, unknown, invalidated or otherwise rejected
     /// (gRPC `Unauthenticated`).
     #[error("permio: unauthenticated: {message}")]
+    #[non_exhaustive]
     Auth {
         /// The server's message.
         message: String,
@@ -49,6 +71,7 @@ pub enum Error {
     /// into `missing`; those resource URIs are the fully qualified internal ones
     /// (`/organisation/{org}/project/{project}/...`), not the URIs you sent.
     #[error("permio: permission denied: {message}")]
+    #[non_exhaustive]
     Permission {
         /// The server's message.
         message: String,
@@ -61,6 +84,7 @@ pub enum Error {
     /// The request was rejected as malformed (gRPC `InvalidArgument`), or
     /// failed the SDK's own checks (then `status` is `None`).
     #[error("{message}")]
+    #[non_exhaustive]
     Validation {
         /// What is wrong.
         message: String,
@@ -70,6 +94,7 @@ pub enum Error {
 
     /// The requested entity does not exist (gRPC `NotFound`).
     #[error("permio: not found: {message}")]
+    #[non_exhaustive]
     NotFound {
         /// The server's message.
         message: String,
@@ -80,6 +105,7 @@ pub enum Error {
     /// The API could not be reached or is temporarily unavailable (gRPC
     /// `Unavailable`).
     #[error("permio: unavailable: {message}")]
+    #[non_exhaustive]
     Unavailable {
         /// The server's or transport's message.
         message: String,
@@ -90,6 +116,7 @@ pub enum Error {
     /// The call did not finish in time (gRPC `DeadlineExceeded`, or the
     /// client's per-attempt timeout).
     #[error("permio: timed out: {message}")]
+    #[non_exhaustive]
     Timeout {
         /// The server's or client's message.
         message: String,
@@ -103,6 +130,7 @@ pub enum Error {
     /// delay when it is within [`RetryConfig::max_delay`](crate::RetryConfig);
     /// otherwise this is returned with `retry_after` set to that delay.
     #[error("permio: rate limited: {message}")]
+    #[non_exhaustive]
     RateLimited {
         /// The server's message.
         message: String,
@@ -117,6 +145,7 @@ pub enum Error {
     /// principal does not hold the requested permissions. This is a normal
     /// authorization outcome, not an API failure, so it has no status.
     #[error("{message}")]
+    #[non_exhaustive]
     Denied {
         /// Summary of what is missing.
         message: String,
@@ -129,6 +158,7 @@ pub enum Error {
     /// Any other API failure (e.g. `AlreadyExists`, `Internal`), or a
     /// response the SDK could not trust (then `status` is `None`).
     #[error("{message}")]
+    #[non_exhaustive]
     Other {
         /// The message.
         message: String,
@@ -342,18 +372,26 @@ fn retry_info_delay(details: &[u8]) -> Option<Duration> {
     })
 }
 
-/// Parses a `retry-after` value in whole seconds. HTTP dates are not used by
-/// the perms.io gateway and are ignored.
+/// Parses a `retry-after` value: delay-seconds, or an HTTP-date (RFC 9110),
+/// which is turned into the time left until then (zero if it has passed).
 pub(crate) fn parse_retry_after(value: &str) -> Option<Duration> {
     let value = value.trim();
-    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+    if value.is_empty() {
         return None;
     }
-    value.parse::<u64>().ok().map(Duration::from_secs)
+    if value.bytes().all(|b| b.is_ascii_digit()) {
+        return value.parse::<u64>().ok().map(Duration::from_secs);
+    }
+    let at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        at.duration_since(std::time::SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 /// How long the server asked the client to wait before retrying: a
-/// `google.rpc.RetryInfo` error detail, else a `retry-after` header in seconds.
+/// `google.rpc.RetryInfo` error detail, else a `retry-after` header (seconds
+/// or an HTTP-date).
 #[must_use]
 pub fn server_retry_delay(status: &Status) -> Option<Duration> {
     retry_info_delay(status.details()).or_else(|| {
@@ -365,6 +403,7 @@ pub fn server_retry_delay(status: &Status) -> Option<Duration> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn encode_retry_info(delay: Duration) -> Vec<u8> {
     use prost::Message as _;
     let info = RetryInfo {
@@ -385,10 +424,9 @@ pub(crate) fn encode_retry_info(delay: Duration) -> Vec<u8> {
 }
 
 /// Builds a `ResourceExhausted` status carrying a `google.rpc.RetryInfo`
-/// detail, the way the perms.io API reports rate limiting. Useful for fake
-/// servers in tests.
-#[must_use]
-pub fn rate_limited_status(message: impl Into<String>, retry_after: Duration) -> Status {
+/// detail, the way the perms.io API reports rate limiting.
+#[cfg(test)]
+pub(crate) fn rate_limited_status(message: impl Into<String>, retry_after: Duration) -> Status {
     Status::with_details(
         Code::ResourceExhausted,
         message,
@@ -469,6 +507,34 @@ mod tests {
         assert_eq!(server_retry_delay(&s), Some(Duration::from_secs(3)));
         assert_eq!(server_retry_delay(&Status::resource_exhausted("x")), None);
         assert_eq!(parse_retry_after("1.5"), None);
+        assert_eq!(parse_retry_after(""), None);
+        assert_eq!(parse_retry_after("soon"), None);
+    }
+
+    #[test]
+    fn retry_after_http_date() {
+        let in_a_minute = std::time::SystemTime::now() + Duration::from_secs(60);
+        let header = httpdate::fmt_http_date(in_a_minute);
+        let delay = parse_retry_after(&header).expect("HTTP-date parsed");
+        // One-second resolution.
+        assert!(delay > Duration::from_secs(57) && delay <= Duration::from_secs(60));
+        assert_eq!(
+            parse_retry_after("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(Duration::ZERO)
+        );
+        // The obsolete RFC 850 and asctime forms are accepted too.
+        assert_eq!(
+            parse_retry_after("Sunday, 06-Nov-94 08:49:37 GMT"),
+            Some(Duration::ZERO)
+        );
+
+        let mut s = Status::resource_exhausted("slow down");
+        s.metadata_mut()
+            .insert("retry-after", header.parse().unwrap());
+        let Error::RateLimited { retry_after, .. } = Error::from(s) else {
+            panic!("wrong variant")
+        };
+        assert!(retry_after.is_some_and(|d| d > Duration::from_secs(57)));
     }
 
     #[test]

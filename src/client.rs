@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::future::try_join_all;
+use futures_util::{StreamExt, TryStreamExt};
 use http::HeaderValue;
 use tonic::transport::{Channel, Endpoint};
 
@@ -18,7 +18,7 @@ use crate::raw::organisation::v1::organisation_service_client::OrganisationServi
 use crate::raw::permissions::v1 as pb;
 use crate::raw::permissions::v1::permissions_service_client::PermissionsServiceClient;
 use crate::resource::validate_resource_uri;
-use crate::transport::{RetryConfig, Transport};
+use crate::transport::{CallTimeout, RetryConfig, Transport};
 
 /// Production API.
 pub const DEFAULT_ENDPOINT: &str = "https://api.perms.io";
@@ -32,6 +32,18 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Most resources or permissions accepted by one `Check`/`BatchCheck` call.
 const MAX_PER_CALL: usize = 100;
 
+/// Most `BatchCheck` calls one [`Client::batch_check`] has in flight at once.
+const BATCH_CHECK_CONCURRENCY: usize = 4;
+
+/// Wraps a request message, attaching the call's overall timeout if it has one.
+pub(crate) fn request<T>(message: T, timeout: Option<Duration>) -> tonic::Request<T> {
+    let mut req = tonic::Request::new(message);
+    if let Some(timeout) = timeout {
+        req.extensions_mut().insert(CallTimeout::new(timeout));
+    }
+    req
+}
+
 /// Builder for [`Client`]; see [`Client::builder`].
 #[derive(Default)]
 pub struct ClientBuilder {
@@ -39,6 +51,7 @@ pub struct ClientBuilder {
     endpoint: Option<String>,
     project: Option<String>,
     timeout: Option<Duration>,
+    call_timeout: Option<Duration>,
     retry: Option<RetryConfig>,
     channel: Option<Channel>,
 }
@@ -50,6 +63,7 @@ impl fmt::Debug for ClientBuilder {
             .field("endpoint", &self.endpoint)
             .field("project", &self.project)
             .field("timeout", &self.timeout)
+            .field("call_timeout", &self.call_timeout)
             .field("retry", &self.retry)
             .field("channel", &self.channel.is_some())
             .finish()
@@ -83,11 +97,21 @@ impl ClientBuilder {
     }
 
     /// Timeout per attempt. Default 10 s; [`Duration::ZERO`] disables it.
-    /// For an overall deadline across retries, wrap the call in
-    /// [`tokio::time::timeout`].
+    /// See [`call_timeout`](Self::call_timeout) for a deadline across retries.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Default overall deadline for each call, across every attempt and the
+    /// backoff between retries (for list streams: for each page request).
+    /// Without one (the default), a read can take up to `retries + 1`
+    /// per-attempt timeouts plus backoff. A call's own `timeout` option
+    /// overrides it; [`Duration::ZERO`] here means none.
+    #[must_use]
+    pub fn call_timeout(mut self, timeout: Duration) -> Self {
+        self.call_timeout = Some(timeout);
         self
     }
 
@@ -157,11 +181,11 @@ impl ClientBuilder {
             channel,
             authorization,
             timeout,
+            self.call_timeout.filter(|d| !d.is_zero()),
             self.retry.unwrap_or_default(),
         );
         Ok(Client {
-            permissions: PermissionsServiceClient::new(transport.clone()),
-            organisations: OrganisationServiceClient::new(transport),
+            transport,
             project: self.project.map(Arc::from),
             endpoint: Arc::from(endpoint),
             api_key_kind,
@@ -220,8 +244,7 @@ fn connect(url: &str, timeout: Option<Duration>) -> Result<Channel, Error> {
 /// ```
 #[derive(Clone)]
 pub struct Client {
-    pub(crate) permissions: PermissionsServiceClient<Transport>,
-    organisations: OrganisationServiceClient<Transport>,
+    transport: Transport,
     project: Option<Arc<str>>,
     endpoint: Arc<str>,
     api_key_kind: ApiKeyKind,
@@ -239,11 +262,13 @@ impl fmt::Debug for Client {
 
 /// What to check; see [`Client::check_detailed`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Check {
     principal: String,
     resources: Vec<String>,
     permissions: Vec<String>,
     project: Option<String>,
+    timeout: Option<Duration>,
 }
 
 impl Check {
@@ -299,10 +324,20 @@ impl Check {
         self.project = Some(project.into());
         self
     }
+
+    /// Overall deadline for this call, across retries. Overrides the client's
+    /// [`call_timeout`](ClientBuilder::call_timeout); [`Duration::ZERO`]
+    /// means none.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
 }
 
 /// Result of [`Client::check_detailed`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CheckResult {
     /// True when the principal holds every permission on every resource.
     pub allowed: bool,
@@ -312,11 +347,13 @@ pub struct CheckResult {
 
 /// What to check in one [`Client::batch_check`] call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BatchCheck {
     principal: String,
     resources: Vec<String>,
     permissions: Vec<String>,
     project: Option<String>,
+    timeout: Option<Duration>,
 }
 
 impl BatchCheck {
@@ -330,7 +367,7 @@ impl BatchCheck {
     }
 
     /// Adds resource URIs, each answered separately. More than 100 are split
-    /// into several `BatchCheck` calls, sent concurrently.
+    /// into several `BatchCheck` calls, at most four in flight at once.
     #[must_use]
     pub fn resources<I, S>(mut self, resources: I) -> Self
     where
@@ -373,10 +410,20 @@ impl BatchCheck {
         self.project = Some(project.into());
         self
     }
+
+    /// Overall deadline for this call, across retries. Overrides the client's
+    /// [`call_timeout`](ClientBuilder::call_timeout); [`Duration::ZERO`]
+    /// means none.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
 }
 
 /// One resource's result from [`Client::batch_check`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct BatchCheckEntry {
     /// The resource URI.
     pub resource: String,
@@ -388,11 +435,14 @@ pub struct BatchCheckEntry {
 
 /// Options for [`Client::who_has_access`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WhoHasAccess {
     resource: String,
     permission: Option<String>,
     expand_groups: bool,
     page_size: Option<u32>,
+    project: Option<String>,
+    timeout: Option<Duration>,
 }
 
 impl WhoHasAccess {
@@ -428,15 +478,78 @@ impl WhoHasAccess {
         self.page_size = Some(size);
         self
     }
+
+    /// Uses this project instead of the client's.
+    #[must_use]
+    pub fn project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+
+    /// Overall deadline for each page request, across its retries. Overrides the client's
+    /// [`call_timeout`](ClientBuilder::call_timeout); [`Duration::ZERO`]
+    /// means none.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+}
+
+/// What to ask in [`Client::list_access`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ListAccess {
+    principal: String,
+    permission: String,
+    under: String,
+    project: Option<String>,
+    timeout: Option<Duration>,
+}
+
+impl ListAccess {
+    /// Where may `principal` use `permission` at or below the URI `under`?
+    #[must_use]
+    pub fn new(
+        principal: impl Into<String>,
+        permission: impl Into<String>,
+        under: impl Into<String>,
+    ) -> Self {
+        ListAccess {
+            principal: principal.into(),
+            permission: permission.into(),
+            under: under.into(),
+            ..ListAccess::default()
+        }
+    }
+
+    /// Uses this project instead of the client's.
+    #[must_use]
+    pub fn project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+
+    /// Overall deadline for each page request, across its retries. Overrides the client's
+    /// [`call_timeout`](ClientBuilder::call_timeout); [`Duration::ZERO`]
+    /// means none.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
 }
 
 /// What to grant or revoke; see [`Client::grant`] and [`Client::revoke`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Grant {
     principal: String,
     resource: String,
     permissions: Vec<String>,
     roles: Vec<String>,
+    project: Option<String>,
+    timeout: Option<Duration>,
 }
 
 impl Grant {
@@ -487,6 +600,22 @@ impl Grant {
         self.roles.extend(roles.into_iter().map(Into::into));
         self
     }
+
+    /// Uses this project instead of the client's.
+    #[must_use]
+    pub fn project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
+    }
+
+    /// Overall deadline for this call, across retries (writes are never retried). Overrides the client's
+    /// [`call_timeout`](ClientBuilder::call_timeout); [`Duration::ZERO`]
+    /// means none.
+    #[must_use]
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
 }
 
 /// The kind of credential the client is using, as reported by [`Client::who_am_i`].
@@ -517,6 +646,7 @@ pub enum ApiKeyAccess {
 
 /// The caller, as returned by [`Client::who_am_i`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct WhoAmI {
     /// The caller's principal ID; for an API key, the key's ID.
     pub principal_id: String,
@@ -623,6 +753,19 @@ impl Client {
         }
     }
 
+    /// A clone of this client whose default overall deadline per call is
+    /// `timeout`; see [`ClientBuilder::call_timeout`]. Also applies to the
+    /// raw clients it hands out.
+    #[must_use]
+    pub fn with_call_timeout(&self, timeout: Duration) -> Client {
+        Client {
+            transport: self
+                .transport
+                .with_call_timeout(Some(timeout).filter(|d| !d.is_zero())),
+            ..self.clone()
+        }
+    }
+
     /// The default project, if configured.
     #[must_use]
     pub fn project(&self) -> Option<&str> {
@@ -646,14 +789,14 @@ impl Client {
     /// [`tonic::Status`]; convert them with `permio::Error::from`.
     #[must_use]
     pub fn raw_permissions(&self) -> PermissionsServiceClient<Transport> {
-        self.permissions.clone()
+        PermissionsServiceClient::new(self.transport.clone())
     }
 
     /// The raw generated `OrganisationService` client; see
     /// [`raw_permissions`](Self::raw_permissions).
     #[must_use]
     pub fn raw_organisations(&self) -> OrganisationServiceClient<Transport> {
-        self.organisations.clone()
+        OrganisationServiceClient::new(self.transport.clone())
     }
 
     /// Groups of principals: create them, manage members, list them.
@@ -675,7 +818,7 @@ impl Client {
     }
 
     pub(crate) fn rpc(&self) -> PermissionsServiceClient<Transport> {
-        self.permissions.clone()
+        self.raw_permissions()
     }
 
     /// True when `principal` holds `permission` on `resource` (directly, via
@@ -752,6 +895,11 @@ impl Client {
         if result.allowed {
             return Ok(true);
         }
+        // Denied without saying what is missing: nothing shows that any one
+        // permission is held, so fail closed.
+        if result.missing.is_empty() {
+            return Ok(false);
+        }
         Ok(result
             .missing
             .iter()
@@ -774,12 +922,15 @@ impl Client {
         let project_name = self.resolve_project(check.project.as_deref())?;
         let res = self
             .rpc()
-            .check(pb::CheckPermissionRequest {
-                project_name,
-                principal_id: check.principal,
-                resource_uris,
-                permissions,
-            })
+            .check(request(
+                pb::CheckPermissionRequest {
+                    project_name,
+                    principal_id: check.principal,
+                    resource_uris,
+                    permissions,
+                },
+                check.timeout,
+            ))
             .await?
             .into_inner();
         Ok(CheckResult {
@@ -853,15 +1004,21 @@ impl Client {
         let project_name = self.resolve_project(batch.project.as_deref())?;
         let calls = resource_uris.chunks(MAX_PER_CALL).map(|chunk| {
             let mut rpc = self.rpc();
-            let req = pb::BatchCheckRequest {
-                project_name: project_name.clone(),
-                principal_id: batch.principal.clone(),
-                resource_uris: chunk.to_vec(),
-                permissions: permissions.clone(),
-            };
+            let req = request(
+                pb::BatchCheckRequest {
+                    project_name: project_name.clone(),
+                    principal_id: batch.principal.clone(),
+                    resource_uris: chunk.to_vec(),
+                    permissions: permissions.clone(),
+                },
+                batch.timeout,
+            );
             async move { rpc.batch_check(req).await.map(tonic::Response::into_inner) }
         });
-        let responses = try_join_all(calls).await?;
+        let responses: Vec<pb::BatchCheckResponse> = futures_util::stream::iter(calls)
+            .buffered(BATCH_CHECK_CONCURRENCY)
+            .try_collect()
+            .await?;
         let mut by_uri: HashMap<String, BatchCheckEntry> = HashMap::new();
         for r in responses.into_iter().flat_map(|r| r.results) {
             by_uri.insert(
@@ -884,42 +1041,49 @@ impl Client {
             .collect()
     }
 
-    /// Answers "where may `principal` use `permission` at or below `under`?",
-    /// following every page. Use the result to filter lists in your database:
-    /// `covers_all` means no filter is needed, [`AccessScopes::to_prefixes`]
-    /// gives path prefixes, [`AccessScopes::regex_pattern`] a regex, and
-    /// [`AccessScopes::allows`] tests a single URI.
+    /// Answers "where may the principal use the permission at or below
+    /// `under`?", following every page. Use the result to filter lists in
+    /// your database: `covers_all` means no filter is needed,
+    /// [`AccessScopes::to_prefixes`] gives path prefixes,
+    /// [`AccessScopes::regex_pattern`] a regex, and [`AccessScopes::allows`]
+    /// tests a single URI.
+    ///
+    /// ```no_run
+    /// # async fn demo(client: permio::Client) -> Result<(), permio::Error> {
+    /// let scopes = client
+    ///     .list_access(permio::ListAccess::new("alice", "docs.read", "/docs"))
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
     ///
     /// # Errors
     ///
     /// [`Error::Permission`] unless the API key has `permission.check` on
     /// `under` and `principal.assignment.get` on the principal.
-    pub async fn list_access(
-        &self,
-        principal: &str,
-        permission: &str,
-        under: &str,
-    ) -> Result<AccessScopes, Error> {
-        use futures_util::TryStreamExt;
-        require(principal, "principal")?;
-        require(permission, "permission")?;
-        validate_resource_uri(under)?;
-        let project_name = self.resolve_project(None)?;
+    pub async fn list_access(&self, query: ListAccess) -> Result<AccessScopes, Error> {
+        require(&query.principal, "principal")?;
+        require(&query.permission, "permission")?;
+        validate_resource_uri(&query.under)?;
+        let project_name = self.resolve_project(query.project.as_deref())?;
         let rpc = self.rpc();
-        let (principal, permission, under_uri) = (
-            principal.to_string(),
-            permission.to_string(),
-            under.to_string(),
+        let (principal, permission, under_uri, timeout) = (
+            query.principal,
+            query.permission,
+            query.under.clone(),
+            query.timeout,
         );
         let pages: Vec<pb::ListAccessResponse> = paginate(100, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListAccessRequest {
-                project_name: project_name.clone(),
-                principal_id: principal.clone(),
-                permission: permission.clone(),
-                under_uri: under_uri.clone(),
-                pagination: Some(pagination),
-            };
+            let req = request(
+                pb::ListAccessRequest {
+                    project_name: project_name.clone(),
+                    principal_id: principal.clone(),
+                    permission: permission.clone(),
+                    under_uri: under_uri.clone(),
+                    pagination: Some(pagination),
+                },
+                timeout,
+            );
             async move {
                 let mut res = rpc.list_access(req).await?.into_inner();
                 let pagination = res.pagination.take();
@@ -938,7 +1102,7 @@ impl Client {
             }));
         }
         Ok(AccessScopes {
-            under: under.to_string(),
+            under: query.under,
             covers_all,
             scopes,
         })
@@ -955,23 +1119,25 @@ impl Client {
     /// [`Error::Permission`] unless the API key has `principal.list` and
     /// `principal.assignment.list` on the project.
     pub async fn who_has_access(&self, query: WhoHasAccess) -> Result<Vec<AccessEntry>, Error> {
-        use futures_util::TryStreamExt;
         validate_resource_uri(&query.resource)?;
         if query.permission.as_deref() == Some("") {
             return Err(Error::validation("permio: permission must not be empty"));
         }
-        let project_name = self.resolve_project(None)?;
+        let project_name = self.resolve_project(query.project.as_deref())?;
         let rpc = self.rpc();
         let page_size = query.page_size.unwrap_or(100);
         paginate(page_size, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListPrincipalsWithAccessRequest {
-                project_name: project_name.clone(),
-                resource_uri: query.resource.clone(),
-                permission: query.permission.clone(),
-                expand_groups: query.expand_groups,
-                pagination: Some(pagination),
-            };
+            let req = request(
+                pb::ListPrincipalsWithAccessRequest {
+                    project_name: project_name.clone(),
+                    resource_uri: query.resource.clone(),
+                    permission: query.permission.clone(),
+                    expand_groups: query.expand_groups,
+                    pagination: Some(pagination),
+                },
+                query.timeout,
+            );
             async move {
                 let res = rpc.list_principals_with_access(req).await?.into_inner();
                 Ok((res.principals, res.pagination))
@@ -982,9 +1148,10 @@ impl Client {
         .await
     }
 
-    /// Streams every permission in the project.
+    /// Streams every permission in the project (`options.project`, else the
+    /// client's).
     pub fn list_permissions(&self, options: ListOptions) -> ListStream<pb::Permission> {
-        let project_name = match self.resolve_project(None) {
+        let project_name = match self.resolve_project(options.project.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         };
@@ -992,11 +1159,14 @@ impl Client {
         let limit = options.limit().unsigned_abs();
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListPermissionsRequest {
-                project_name: project_name.clone(),
-                pagination: Some(pagination),
-                search: options.search.clone(),
-            };
+            let req = request(
+                pb::ListPermissionsRequest {
+                    project_name: project_name.clone(),
+                    pagination: Some(pagination),
+                    search: options.search.clone(),
+                },
+                options.timeout,
+            );
             async move {
                 let res = rpc.list_permissions(req).await?.into_inner();
                 Ok((res.permissions, res.pagination))
@@ -1006,7 +1176,7 @@ impl Client {
 
     /// Streams every role in the project.
     pub fn list_roles(&self, options: ListOptions) -> ListStream<pb::Role> {
-        let project_name = match self.resolve_project(None) {
+        let project_name = match self.resolve_project(options.project.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         };
@@ -1014,11 +1184,14 @@ impl Client {
         let limit = options.limit().unsigned_abs();
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListRolesRequest {
-                project_name: project_name.clone(),
-                pagination: Some(pagination),
-                search: options.search.clone(),
-            };
+            let req = request(
+                pb::ListRolesRequest {
+                    project_name: project_name.clone(),
+                    pagination: Some(pagination),
+                    search: options.search.clone(),
+                },
+                options.timeout,
+            );
             async move {
                 let res = rpc.list_roles(req).await?.into_inner();
                 Ok((res.roles, res.pagination))
@@ -1028,7 +1201,7 @@ impl Client {
 
     /// Streams the IDs of every principal with grants in the project.
     pub fn list_principals(&self, options: ListOptions) -> ListStream<String> {
-        let project_name = match self.resolve_project(None) {
+        let project_name = match self.resolve_project(options.project.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         };
@@ -1036,11 +1209,14 @@ impl Client {
         let limit = options.limit().unsigned_abs();
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::ListPrincipalsRequest {
-                project_name: project_name.clone(),
-                pagination: Some(pagination),
-                search: options.search.clone(),
-            };
+            let req = request(
+                pb::ListPrincipalsRequest {
+                    project_name: project_name.clone(),
+                    pagination: Some(pagination),
+                    search: options.search.clone(),
+                },
+                options.timeout,
+            );
             async move {
                 let res = rpc.list_principals(req).await?.into_inner();
                 Ok((res.principals, res.pagination))
@@ -1058,7 +1234,7 @@ impl Client {
         if let Err(e) = require(principal, "principal") {
             return failed(e);
         }
-        let project_name = match self.resolve_project(None) {
+        let project_name = match self.resolve_project(options.project.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         };
@@ -1067,11 +1243,14 @@ impl Client {
         let limit = options.limit().unsigned_abs();
         paginate(limit, move |pagination| {
             let mut rpc = rpc.clone();
-            let req = pb::GetAllAssignmentsForPrincipalRequest {
-                project_name: project_name.clone(),
-                principal_id: principal.clone(),
-                pagination: Some(pagination),
-            };
+            let req = request(
+                pb::GetAllAssignmentsForPrincipalRequest {
+                    project_name: project_name.clone(),
+                    principal_id: principal.clone(),
+                    pagination: Some(pagination),
+                },
+                options.timeout,
+            );
             async move {
                 let res = rpc
                     .get_all_assignments_for_principal(req)
@@ -1095,9 +1274,10 @@ impl Client {
     /// project, or the input is malformed; [`Error::Permission`] unless the
     /// API key has full access.
     pub async fn grant(&self, grant: Grant) -> Result<(), Error> {
+        let timeout = grant.timeout;
         let req = self.grant_request(grant)?;
         self.rpc()
-            .grant_user_permissions_and_roles_on_resource(req)
+            .grant_user_permissions_and_roles_on_resource(request(req, timeout))
             .await?;
         Ok(())
     }
@@ -1114,9 +1294,10 @@ impl Client {
     ///
     /// [`Error::Permission`] unless the API key has full access.
     pub async fn revoke(&self, revoke: Grant) -> Result<(), Error> {
+        let timeout = revoke.timeout;
         let req = self.grant_request(revoke)?;
         self.rpc()
-            .revoke_user_permissions_and_roles_on_resource(
+            .revoke_user_permissions_and_roles_on_resource(request(
                 pb::RevokeUserPermissionsAndRolesOnResourceRequest {
                     project_name: req.project_name,
                     user_id: req.user_id,
@@ -1124,7 +1305,8 @@ impl Client {
                     permissions: req.permissions,
                     roles: req.roles,
                 },
-            )
+                timeout,
+            ))
             .await?;
         Ok(())
     }
@@ -1143,7 +1325,7 @@ impl Client {
             ));
         }
         Ok(pb::GrantUserPermissionsAndRolesOnResourceRequest {
-            project_name: self.resolve_project(None)?,
+            project_name: self.resolve_project(grant.project.as_deref())?,
             user_id: grant.principal,
             resource_uri: grant.resource,
             permissions,

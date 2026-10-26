@@ -58,10 +58,33 @@ let client = permio::Client::builder()
     .endpoint(permio::DEV_ENDPOINT)     // default permio::DEFAULT_ENDPOINT (https://api.perms.io, production)
     .project("my-app")                  // default project for every call
     .timeout(Duration::from_secs(5))    // per attempt; default 10 s, Duration::ZERO disables
+    .call_timeout(Duration::from_secs(8)) // overall per call, across retries; default none
     .retries(3)                         // idempotent reads only; default 2 (see RetryConfig for delays)
     .build()?;                          // must run inside a Tokio runtime; connects lazily
 
 let other = client.with_project("other-app"); // cheap clone with another default project
+```
+
+### Per-call project and timeout
+
+Every call can override the client's project and overall deadline:
+
+| Call | How |
+| --- | --- |
+| `check_detailed`, `assert_detailed`, `batch_check`, `grant`, `revoke`, `list_access`, `who_has_access` | `.project("other")` / `.timeout(d)` on `Check`, `BatchCheck`, `Grant`, `ListAccess`, `WhoHasAccess` |
+| `list_permissions`, `list_roles`, `list_principals`, `list_assignments`, group lists | `ListOptions::new().project("other").timeout(d)` (the timeout applies to each page request) |
+| group methods | `client.groups().project("other").timeout(d).create(...)` |
+| `check`, `check_all`, `check_any`, `assert`, `who_am_i`, raw clients | `client.with_project("other")` / `client.with_call_timeout(d)` (cheap clones) |
+| a single raw call | `request.extensions_mut().insert(permio::CallTimeout::new(d))` |
+
+```rust
+use permio::{Grant, ListOptions};
+use std::time::Duration;
+
+client
+    .grant(Grant::new("alice", "/docs").permission("docs.read").project("other-app").timeout(Duration::from_secs(3)))
+    .await?;
+let roles = client.list_roles(ListOptions::new().project("other-app"));
 ```
 
 `Client` is cheap to clone and safe to share; clones share one HTTP/2
@@ -98,7 +121,7 @@ let result = client
     .await?;
 println!("{} {:?}", result.allowed, result.missing);
 
-// One answer per resource (more than 100 are split into concurrent calls):
+// One answer per resource (more than 100 are split into calls of 100, at most 4 in flight):
 let entries = client
     .batch_check(BatchCheck::new("alice").permission("docs.read").resources(doc_uris))
     .await?;
@@ -149,7 +172,7 @@ Groups cannot contain groups.
 ## Filtering lists: `list_access` and `who_has_access`
 
 ```rust
-let access = client.list_access("alice", "docs.read", "/docs").await?;
+let access = client.list_access(permio::ListAccess::new("alice", "docs.read", "/docs")).await?;
 if access.covers_all {
     // everything under /docs
 } else {
@@ -171,7 +194,7 @@ that fetches pages lazily:
 ```rust
 use futures_util::TryStreamExt;
 
-let mut roles = client.list_roles(permio::ListOptions::default().search("doc"));
+let mut roles = client.list_roles(permio::ListOptions::new().search("doc"));
 while let Some(role) = roles.try_next().await? {
     println!("{} {}", role.id, role.name);
 }
@@ -180,7 +203,9 @@ let principals: Vec<String> = client.list_principals(Default::default()).try_col
 
 `list_permissions`, `list_roles`, `list_principals`, `list_assignments`,
 `groups().list`, `groups().list_members`, `groups().list_for_principal`.
-`permio::paginate` wraps any raw list RPC the same way.
+`permio::paginate` wraps any raw list RPC the same way. If the API ever
+returns a page cursor it already returned, the stream ends with
+`Error::Other` instead of looping or silently stopping short.
 
 ## Errors
 
@@ -194,13 +219,14 @@ Every fallible call returns `Result<_, permio::Error>`:
 | `Validation` | Malformed input, caught locally (`status: None`) or by the API (`InvalidArgument`) |
 | `NotFound` | Entity does not exist (`NotFound`) |
 | `Unavailable` | API unreachable or temporarily down (`Unavailable`, connection/TLS failures) |
-| `Timeout` | Per-attempt timeout or `DeadlineExceeded` |
-| `RateLimited { retry_after, .. }` | Rate limit used up (`ResourceExhausted`), with the server's requested delay |
+| `Timeout` | Per-attempt or overall (`call_timeout` / `timeout`) deadline passed, or `DeadlineExceeded` |
+| `RateLimited { retry_after, .. }` | Rate limit used up (`ResourceExhausted`, or HTTP 429 from the gateway), with the server's requested delay |
 | `Denied { principal, missing, .. }` | Only from `assert*`: the principal lacks the permission |
 | `Other` | Any other gRPC code (e.g. `AlreadyExists`), or an inconsistent API response |
 
 `err.code()` gives the gRPC code, `err.message()` the server's message and
-`err.status()` the original `tonic::Status`. Errors from raw clients are
+`err.status()` the original `tonic::Status`. `Error` and its variants are
+`#[non_exhaustive]`: match with `..` and keep a `_` arm. Errors from raw clients are
 `tonic::Status`; `permio::Error::from(status)` maps them.
 
 ### Retries and timeouts
@@ -210,10 +236,23 @@ ListAccess, WhoAmI, every Get/List; see `permio::is_idempotent_method`) are
 retried up to 2 times on `Unavailable` / `DeadlineExceeded`, with exponential
 backoff from 100 ms (each delay capped at 2 s and jittered between half and all of it). A
 rate-limited read is retried after the server's `RetryInfo` / `retry-after`
-delay when that is at most `max_delay`; otherwise `Error::RateLimited` is
-returned with `retry_after` set. Writes (create, update, delete, grant,
-revoke, ...) are sent exactly once. For an overall deadline across retries,
-wrap the call in `tokio::time::timeout`.
+delay (seconds or an HTTP-date) when that is at most `max_delay`; otherwise
+`Error::RateLimited` is returned with `retry_after` set. Writes (create,
+update, delete, grant, revoke, ...) are sent exactly once, rate limited or not.
+
+Without an overall deadline a read against a hung backend can take
+`(retries + 1) × timeout` plus backoff (about 30 s by default). Set one with
+`.call_timeout(d)` on the builder, or per call with the `timeout` options
+above: each attempt is then cut short at the deadline, and no retry is
+started that could not finish before it.
+
+```rust
+let retry = permio::RetryConfig::default()
+    .max_retries(3)
+    .base_delay(Duration::from_millis(50))
+    .max_delay(Duration::from_secs(1));
+let client = permio::Client::builder().retry_config(retry).build()?;
+```
 
 ## Raw clients (full API)
 
@@ -240,13 +279,29 @@ let permission = client
 Permission and role CRUD, organisation, project and API key management are
 available this way.
 
+### `tonic` and `prost` versions
+
+The generated code and the raw clients use `tonic` 0.14 and `prost` /
+`prost-types` 0.14. They are re-exported as `permio::tonic`, `permio::prost`
+and `permio::prost_types`, so you can use them (e.g. `tonic::Request`,
+`prost::Message::encode_to_vec`, `prost_types::Timestamp`) without adding
+your own dependency at a matching version. If you do depend on them directly,
+pin the same minor versions as permio.
+
+Semver: these crates are part of permio's public API. Moving to a
+semver-incompatible `tonic`, `prost` or `prost-types` release (e.g. 0.14 to
+0.15) is a breaking change and gets a new minor version of permio while it is
+0.x (a new major version from 1.0 on); patch upgrades of them do not.
+
 ## Integration tests
 
 `tests/live.rs` runs the same scenarios as permio-js against a real
 deployment (whoAmI, grant/check, batch check, list access, who has access,
-revoke, groups, bad key). It is skipped unless `PERMIO_API_KEY` is set, uses
-`PERMIO_BASE_URL` (default the dev API), refuses to run against production,
-and uses `PERMIO_PROJECT` or the key's own project. It needs a full-access
+revoke, groups, bad key). It is skipped unless `PERMIO_API_KEY` is set and
+uses `PERMIO_BASE_URL` (default the dev API). Because it writes, it fails
+unless that URL's host is on an allowlist: `dev-api.perms.io`, `localhost`,
+`127.0.0.1`, `::1`, or a `*.localhost` / `*.test` name. It uses
+`PERMIO_PROJECT` or the key's own project. It needs a full-access
 key and creates fixed `sdk-it-rust-*` IDs, removed before and after the run.
 
 ```sh
@@ -262,7 +317,13 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test            # unit tests run against an in-process tonic server
 cargo doc --no-deps
+cargo +1.88 check --all-targets --locked   # MSRV, as CI runs it
 ```
+
+`Cargo.lock` is committed so the MSRV job resolves the same dependency
+versions every time. After changing dependencies, regenerate it with a
+toolchain whose cargo supports MSRV-aware resolution (1.84+; `resolver = "3"`
+picks versions compatible with `rust-version`) and commit it.
 
 The files under `src/permio/` and `src/pagination/` are generated from
 [PrivateJAR/proto](https://github.com/PrivateJAR/proto) (prost 0.14 / tonic

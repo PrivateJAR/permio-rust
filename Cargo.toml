@@ -30,6 +30,7 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 thiserror = "2"
+httpdate = "1"
 tokio = { version = "1", features = ["time"] }
 
 [features]
