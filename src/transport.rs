@@ -12,7 +12,7 @@ use std::future::Future;
 use std::hash::{BuildHasher, Hasher};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue};
@@ -28,6 +28,41 @@ use crate::error::{parse_retry_after, server_retry_delay};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+/// An overall deadline for one call, across every attempt and the backoff
+/// between them.
+///
+/// The helper methods set it from their `timeout` options. For a raw client
+/// call, put it in the request's extensions:
+///
+/// ```no_run
+/// # async fn demo(client: permio::Client) -> Result<(), permio::Error> {
+/// use std::time::Duration;
+/// use permio::raw::permissions::v1::WhoAmIRequest;
+/// let mut req = tonic::Request::new(WhoAmIRequest {});
+/// req.extensions_mut().insert(permio::CallTimeout::new(Duration::from_secs(3)));
+/// let me = client.raw_permissions().who_am_i(req).await?;
+/// # Ok(()) }
+/// ```
+///
+/// [`Duration::ZERO`] means no overall deadline for this call, even when the
+/// client has a default one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CallTimeout(Duration);
+
+impl CallTimeout {
+    /// A deadline of `timeout` from when the call starts.
+    #[must_use]
+    pub fn new(timeout: Duration) -> Self {
+        CallTimeout(timeout)
+    }
+
+    /// The configured duration.
+    #[must_use]
+    pub fn duration(self) -> Duration {
+        self.0
+    }
+}
+
 /// Retry settings for idempotent reads.
 ///
 /// Reads on the allowlist (see [`is_idempotent_method`]) are retried on
@@ -36,7 +71,16 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// (`ResourceExhausted`) is retried after the server's requested delay when
 /// the server gives one and it is at most `max_delay`. Writes (create, update,
 /// delete, grant, revoke, ...) are never retried.
+///
+/// ```
+/// use std::time::Duration;
+/// let retry = permio::RetryConfig::default()
+///     .max_retries(3)
+///     .base_delay(Duration::from_millis(50));
+/// assert_eq!(retry.max_retries, 3);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RetryConfig {
     /// Retries after the first attempt. Default 2.
     pub max_retries: u32,
@@ -64,6 +108,27 @@ impl RetryConfig {
             max_retries: 0,
             ..RetryConfig::default()
         }
+    }
+
+    /// Sets the number of retries after the first attempt.
+    #[must_use]
+    pub fn max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    /// Sets the delay before the first retry.
+    #[must_use]
+    pub fn base_delay(mut self, delay: Duration) -> Self {
+        self.base_delay = delay;
+        self
+    }
+
+    /// Sets the upper bound for a single delay.
+    #[must_use]
+    pub fn max_delay(mut self, delay: Duration) -> Self {
+        self.max_delay = delay;
+        self
     }
 }
 
@@ -112,7 +177,7 @@ pub fn is_idempotent_method(name: &str) -> bool {
 
 /// The SDK's tower service around a tonic [`Channel`]: adds the
 /// `authorization: Bearer <key>` header, applies the per-attempt timeout and
-/// retries idempotent reads.
+/// the overall deadline ([`CallTimeout`]) and retries idempotent reads.
 ///
 /// It buffers each request and response body, which is right for the
 /// perms.io API (every public RPC is unary).
@@ -121,6 +186,7 @@ pub struct Transport {
     inner: Channel,
     authorization: HeaderValue,
     timeout: Option<Duration>,
+    call_timeout: Option<Duration>,
     retry: RetryConfig,
 }
 
@@ -129,6 +195,7 @@ impl fmt::Debug for Transport {
         f.debug_struct("Transport")
             .field("authorization", &"Bearer <redacted>")
             .field("timeout", &self.timeout)
+            .field("call_timeout", &self.call_timeout)
             .field("retry", &self.retry)
             .finish_non_exhaustive()
     }
@@ -139,13 +206,22 @@ impl Transport {
         inner: Channel,
         authorization: HeaderValue,
         timeout: Option<Duration>,
+        call_timeout: Option<Duration>,
         retry: RetryConfig,
     ) -> Self {
         Transport {
             inner,
             authorization,
             timeout,
+            call_timeout,
             retry,
+        }
+    }
+
+    pub(crate) fn with_call_timeout(&self, call_timeout: Option<Duration>) -> Self {
+        Transport {
+            call_timeout,
+            ..self.clone()
         }
     }
 
@@ -170,16 +246,33 @@ impl Transport {
             })?
             .to_bytes();
 
+        // The overall deadline: the call's own CallTimeout, else the client's
+        // default. Zero means none.
+        let overall = parts
+            .extensions
+            .get::<CallTimeout>()
+            .map(|t| t.0)
+            .or(self.call_timeout)
+            .filter(|d| !d.is_zero());
+        let deadline = overall.map(|d| (d, Instant::now() + d));
+
         let mut attempt: u32 = 0;
         loop {
             let req = http::Request::from_parts(parts.clone(), Body::new(Full::new(body.clone())));
-            let status = match self.attempt(req).await {
+            let status = match self.attempt(req, deadline).await {
                 Ok(Outcome::Ok(response)) => return Ok(response),
                 Ok(Outcome::Failed(status)) | Err(status) => status,
             };
             let Some(delay) = self.retry_delay(&status, attempt, retries) else {
                 return Err(Box::new(status));
             };
+            // Don't start a retry that could not finish before the deadline:
+            // report the failure we have instead of a bare timeout.
+            if let Some((_, at)) = deadline {
+                if Instant::now() + delay >= at {
+                    return Err(Box::new(status));
+                }
+            }
             tokio::time::sleep(delay).await;
             attempt += 1;
         }
@@ -217,7 +310,11 @@ impl Transport {
         })
     }
 
-    async fn attempt(&self, req: http::Request<Body>) -> Result<Outcome, Status> {
+    async fn attempt(
+        &self,
+        req: http::Request<Body>,
+        deadline: Option<(Duration, Instant)>,
+    ) -> Result<Outcome, Status> {
         let mut svc = self.inner.clone();
         let call = async move {
             std::future::poll_fn(|cx| svc.poll_ready(cx))
@@ -228,10 +325,29 @@ impl Transport {
             let collected = body.collect().await.map_err(transport_status)?;
             Ok::<_, Status>(finish(parts, collected))
         };
-        match self.timeout {
-            Some(limit) => tokio::time::timeout(limit, call).await.map_err(|_| {
-                Status::deadline_exceeded(format!("request timed out after {limit:?}"))
-            })?,
+        let per_attempt = self.timeout.map(|limit| {
+            (
+                Instant::now() + limit,
+                Status::deadline_exceeded(format!("request timed out after {limit:?}")),
+            )
+        });
+        let overall = deadline.map(|(limit, at)| {
+            (
+                at,
+                Status::deadline_exceeded(format!(
+                    "call exceeded its overall timeout of {limit:?}"
+                )),
+            )
+        });
+        // Whichever deadline comes first applies to this attempt.
+        let limit = match (per_attempt, overall) {
+            (Some(a), Some(b)) => Some(if b.0 <= a.0 { b } else { a }),
+            (a, b) => a.or(b),
+        };
+        match limit {
+            Some((at, status)) => tokio::time::timeout_at(at.into(), call)
+                .await
+                .map_err(|_| status)?,
             None => call.await,
         }
     }
@@ -299,7 +415,11 @@ fn http_status_code(status: http::StatusCode) -> Code {
         401 => Code::Unauthenticated,
         403 => Code::PermissionDenied,
         404 => Code::Unimplemented,
-        429 | 502 | 503 | 504 => Code::Unavailable,
+        // The gRPC spec maps 429 to Unavailable; the perms.io gateway uses it
+        // for rate limiting, so it is reported as rate limited instead (and
+        // only retried when the server says when).
+        429 => Code::ResourceExhausted,
+        502..=504 => Code::Unavailable,
         _ => Code::Unknown,
     }
 }
@@ -375,10 +495,69 @@ mod tests {
         }
     }
 
+    async fn http_failure(status: u16, retry_after: Option<&str>) -> Status {
+        let mut builder = http::Response::builder().status(status);
+        if let Some(v) = retry_after {
+            builder = builder.header("retry-after", v);
+        }
+        let (parts, body) = builder.body(Full::new(Bytes::new())).unwrap().into_parts();
+        let collected = body.collect().await.unwrap();
+        match finish(parts, collected) {
+            Outcome::Failed(status) => status,
+            Outcome::Ok(_) => panic!("HTTP {status} must fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_429_without_grpc_status_is_rate_limited() {
+        let status = http_failure(429, Some("2")).await;
+        assert_eq!(status.code(), Code::ResourceExhausted);
+        match crate::Error::from(status) {
+            crate::Error::RateLimited { retry_after, .. } => {
+                assert_eq!(retry_after, Some(Duration::from_secs(2)));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let date = httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(30));
+        let status = http_failure(429, Some(&date)).await;
+        let delay = server_retry_delay(&status).expect("HTTP-date retry-after kept");
+        assert!(delay > Duration::from_secs(27) && delay <= Duration::from_secs(30));
+
+        let status = http_failure(429, None).await;
+        assert!(matches!(
+            crate::Error::from(status),
+            crate::Error::RateLimited {
+                retry_after: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            crate::Error::from(http_failure(503, None).await),
+            crate::Error::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn retry_config_builder() {
+        let r = RetryConfig::default()
+            .max_retries(5)
+            .base_delay(Duration::from_millis(1))
+            .max_delay(Duration::from_millis(9));
+        assert_eq!(r.max_retries, 5);
+        assert_eq!(r.base_delay, Duration::from_millis(1));
+        assert_eq!(r.max_delay, Duration::from_millis(9));
+        assert_eq!(RetryConfig::none().max_retries, 0);
+    }
+
     #[test]
     fn http_status_mapping() {
         assert_eq!(
             http_status_code(http::StatusCode::TOO_MANY_REQUESTS),
+            Code::ResourceExhausted
+        );
+        assert_eq!(
+            http_status_code(http::StatusCode::SERVICE_UNAVAILABLE),
             Code::Unavailable
         );
         assert_eq!(

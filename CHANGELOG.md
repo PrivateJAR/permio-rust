@@ -35,7 +35,45 @@ The first release of the hand-written SDK. The crate is renamed from
 - Unit tests against an in-process tonic server; live integration test
   (`tests/live.rs`); CI and crates.io release workflows on Blacksmith.
 
+- Per-call project for every call: `.project()` on `Grant`, `ListAccess` and
+  `WhoHasAccess` (as on `Check` / `BatchCheck`), `ListOptions::project` for
+  every list stream, and `Groups::project` for group methods.
+- Overall deadline across retries: `ClientBuilder::call_timeout` (client
+  default), `Client::with_call_timeout`, per-call `.timeout()` on `Check`,
+  `BatchCheck`, `Grant`, `ListAccess`, `WhoHasAccess`, `ListOptions` and
+  `Groups`, and `permio::CallTimeout` for raw calls.
+- `RetryConfig` setters (`max_retries`, `base_delay`, `max_delay`),
+  `ListOptions::new`, `MissingPermission::new`.
+- `permio::prost` and `permio::prost_types` re-exports (next to
+  `permio::tonic`); the README documents their semver relationship.
+- `Cargo.lock` is committed; the MSRV CI job builds with `--locked`.
+
 ### Changed
+- `list_access` takes a `ListAccess` (`ListAccess::new(principal,
+  permission, under)`) instead of three arguments.
+- Public result and option structs (`CheckResult`, `BatchCheckEntry`,
+  `WhoAmI`, `AccessScope(s)`, `AccessEntry`, `AccessGrant`,
+  `MissingPermission`, `AddMembersResult`, `RemoveMembersResult`,
+  `ListOptions`, `RetryConfig`, and the request builders) and every `Error`
+  variant are `#[non_exhaustive]`; build options with their constructors and
+  setters, and match errors with `..`.
+- An HTTP 429 without a `grpc-status` maps to `Error::RateLimited` (was
+  `Unavailable`), so rate-limited writes are never retried and reads only
+  after the server's delay.
+- `retry-after` accepts an HTTP-date as well as delay-seconds.
+- A repeated pagination cursor ends a list stream with `Error::Other` instead
+  of silently returning a truncated listing.
+- `batch_check` keeps at most 4 `BatchCheck` calls in flight.
+- The live integration test only runs against an allowlist of hosts
+  (`dev-api.perms.io`, loopback, `*.localhost`, `*.test`) instead of
+  refusing a blocklist, and fails rather than skips on any other target.
 - Licensed under Apache-2.0 (LICENSE file added).
 - Minimum Rust version is 1.88 (required by tonic 0.14).
 - TLS (`tls` feature) is on by default.
+
+### Removed
+- `rate_limited_status` is no longer public (it was a test helper).
+
+### Fixed
+- `check_any` returned `true` when the API denied the check without listing
+  what was missing; it now fails closed and returns `false`.

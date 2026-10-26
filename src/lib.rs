@@ -25,6 +25,10 @@
 //! Calls time out after 10 s per attempt. Idempotent reads are retried twice
 //! with jittered exponential backoff on `Unavailable` / `DeadlineExceeded`
 //! (and after the server's delay when rate limited); writes are never retried.
+//! An overall deadline across retries can be set per client
+//! ([`ClientBuilder::call_timeout`]) and per call (the `timeout` option of
+//! each request type, [`ListOptions::timeout`], [`Groups::timeout`]); every
+//! call also takes a `project` the same way.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
@@ -45,20 +49,27 @@ pub use access::{
 pub use apikey::{is_valid_api_key, validate_api_key, ApiKeyKind, API_KEY_LENGTH};
 pub use client::{
     ApiKeyAccess, BatchCheck, BatchCheckEntry, Check, CheckResult, Client, ClientBuilder, Grant,
-    PrincipalKind, WhoAmI, WhoHasAccess, API_KEY_ENV, DEFAULT_ENDPOINT, DEFAULT_TIMEOUT,
-    DEV_ENDPOINT,
+    ListAccess, PrincipalKind, WhoAmI, WhoHasAccess, API_KEY_ENV, DEFAULT_ENDPOINT,
+    DEFAULT_TIMEOUT, DEV_ENDPOINT,
 };
-pub use error::{
-    parse_missing_permissions, rate_limited_status, server_retry_delay, Error, MissingPermission,
-};
+pub use error::{parse_missing_permissions, server_retry_delay, Error, MissingPermission};
 pub use groups::{group, AddMembersResult, Groups, RemoveMembersResult, GROUP_PRINCIPAL_PREFIX};
 pub use list::{paginate, ListOptions, ListStream, MAX_PAGE_SIZE};
 pub use resource::{encode_segment, resource, validate_resource_uri, MAX_RESOURCE_URI_LENGTH};
-pub use transport::{is_idempotent_method, RetryConfig, Transport};
+pub use transport::{is_idempotent_method, CallTimeout, RetryConfig, Transport};
 
 /// Generated message types returned by the helpers.
 pub use raw::permissions::v1::{Assignment, Group, GroupMember, Permission, Role};
 
-/// Re-exported so the types in this crate's API can be named without adding
-/// `tonic` as a direct dependency.
+// Re-exported so the generated types and raw clients can be used without
+// adding these crates as direct dependencies at matching versions. A
+// semver-incompatible upgrade of any of them is a breaking release of permio.
+
+/// The `tonic` version this crate is built on (raw clients, `Status`, `Channel`).
 pub use tonic;
+
+/// The `prost` version the generated messages implement `prost::Message` from.
+pub use prost;
+
+/// The `prost-types` version used by generated messages (e.g. `Timestamp`).
+pub use prost_types;

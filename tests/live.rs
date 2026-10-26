@@ -1,6 +1,7 @@
 //! Integration test against a real deployment. Skipped unless PERMIO_API_KEY is
-//! set. PERMIO_BASE_URL defaults to the development API (DEV_ENDPOINT), and the
-//! test refuses to run against production because it writes. The key needs
+//! set. PERMIO_BASE_URL defaults to the development API (DEV_ENDPOINT). Because
+//! the test writes, it only runs against an allowlist of hosts: the dev API,
+//! localhost / 127.0.0.1 / ::1, and *.localhost / *.test names. The key needs
 //! full access to its project (PERMIO_PROJECT, default: the key's project from
 //! whoAmI):
 //!
@@ -26,13 +27,63 @@ const DOCS: &str = "/sdk-it-rust/docs";
 const DOC1: &str = "/sdk-it-rust/docs/1";
 const OTHER: &str = "/sdk-it-rust/other";
 
-fn is_prod(url: &str) -> bool {
-    let host = url
-        .trim_end_matches('/')
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let host = host.split(':').next().unwrap_or(host);
-    host == "api.perms.io" || host == "temp-api.perms.io"
+/// Whether the live test may write to `url`: an http(s) URL whose host is the
+/// dev API, a loopback address, or a `*.localhost` / `*.test` name. Anything
+/// else, production included, is refused.
+fn is_allowed_target(url: &str) -> bool {
+    let Ok(uri) = url.parse::<http::Uri>() else {
+        return false;
+    };
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return false;
+    }
+    // Userinfo ("user@host") would make the host ambiguous to a reader.
+    if uri.authority().is_some_and(|a| a.as_str().contains('@')) {
+        return false;
+    }
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(&host);
+    matches!(host, "dev-api.perms.io" | "localhost" | "127.0.0.1" | "::1")
+        || host.ends_with(".localhost")
+        || host.ends_with(".test")
+}
+
+#[test]
+fn live_target_allowlist() {
+    for ok in [
+        DEV_ENDPOINT,
+        "https://dev-api.perms.io/",
+        "https://DEV-API.perms.io:443",
+        "http://localhost:8080",
+        "http://127.0.0.1:50051",
+        "http://[::1]:50051",
+        "http://permio.localhost",
+        "https://api.permio.test",
+    ] {
+        assert!(is_allowed_target(ok), "{ok} should be allowed");
+    }
+    for bad in [
+        permio::DEFAULT_ENDPOINT,
+        "https://api.perms.io:443",
+        "https://temp-api.perms.io",
+        "https://staging-api.perms.io",
+        "https://dev-api.perms.io.evil.com",
+        "https://dev-api.perms.io@api.perms.io",
+        "https://localhost.example.com",
+        "https://example.test.com",
+        "ftp://localhost",
+        "dev-api.perms.io",
+        "",
+        "not a url",
+    ] {
+        assert!(!is_allowed_target(bad), "{bad} should be refused");
+    }
 }
 
 // Deleting the permissions also removes every grant that uses them.
@@ -63,10 +114,12 @@ async fn live_integration() {
         .ok()
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| DEV_ENDPOINT.to_string());
-    if is_prod(&base_url) {
-        eprintln!("refusing to run the live integration test against production ({base_url})");
-        return;
-    }
+    // Fail rather than skip: a misconfigured target must not look like a pass.
+    assert!(
+        is_allowed_target(&base_url),
+        "refusing to run the live integration test against {base_url}: only the dev API, \
+         localhost and *.localhost / *.test hosts are allowed"
+    );
 
     let probe = Client::builder()
         .api_key(api_key.clone())
@@ -158,7 +211,10 @@ async fn scenarios(client: &Client, base_url: &str, project: &str) {
     eprintln!("batchCheck ok");
 
     // listAccess returns the granted subtree.
-    let access = client.list_access(ALICE, READ, ROOT).await.unwrap();
+    let access = client
+        .list_access(permio::ListAccess::new(ALICE, READ, ROOT))
+        .await
+        .unwrap();
     assert!(!access.covers_all);
     assert_eq!(access.to_prefixes(), vec![DOCS.to_string()]);
     assert!(access.allows(DOC1));

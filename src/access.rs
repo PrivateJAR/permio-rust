@@ -34,11 +34,23 @@ impl ScopeKind {
 
 /// One place where a principal holds a permission.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AccessScope {
     /// Resource URI (subtree, exact) or URI pattern with `_` segments (pattern).
     pub uri: String,
     /// How `uri` is matched.
     pub kind: ScopeKind,
+}
+
+impl AccessScope {
+    /// A scope of `kind` at `uri`.
+    #[must_use]
+    pub fn new(uri: impl Into<String>, kind: ScopeKind) -> Self {
+        AccessScope {
+            uri: uri.into(),
+            kind,
+        }
+    }
 }
 
 // Splits "/a/b" into ["a", "b"]. Returns None for anything that is not a
@@ -118,6 +130,7 @@ fn scope_regex_source(scope: &AccessScope) -> Option<String> {
 /// outside `under` (its `_` segments can sit in the part that matches
 /// `under`); those really are allowed.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AccessScopes {
     /// The `under` URI that was asked about.
     pub under: String,
@@ -130,6 +143,17 @@ pub struct AccessScopes {
 }
 
 impl AccessScopes {
+    /// Builds an answer by hand, e.g. to stub
+    /// [`Client::list_access`](crate::Client::list_access) in your tests.
+    #[must_use]
+    pub fn new(under: impl Into<String>, covers_all: bool, scopes: Vec<AccessScope>) -> Self {
+        AccessScopes {
+            under: under.into(),
+            covers_all,
+            scopes,
+        }
+    }
+
     /// True when the principal has no access anywhere under `under`.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -248,6 +272,7 @@ pub enum GrantSource {
 
 /// One grant (or one role within a grant) that gives a principal access.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AccessGrant {
     /// The URI the grant was made on: the resource, an ancestor, or a URI with
     /// `_` segments matching it.
@@ -263,6 +288,7 @@ pub struct AccessGrant {
 /// One principal with access to a resource, returned by
 /// [`Client::who_has_access`](crate::Client::who_has_access).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct AccessEntry {
     /// The principal ID; `group:<slug>` for a group.
     pub principal: String,

@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use futures_util::TryStreamExt;
 use permio::raw::pagination::PaginationResponse;
 use permio::raw::permissions::v1::*;
-use permio::{BatchCheck, Check, Error, Grant, ListOptions, WhoHasAccess};
-use support::{default_client, serve, start, Reply, KEY};
+use permio::{BatchCheck, Check, Error, Grant, ListAccess, ListOptions, WhoHasAccess};
+use support::{default_client, rate_limited, serve, start, Call, Reply, KEY};
 use tonic::{Code, Status};
 
 fn page(cursor: &str) -> Option<PaginationResponse> {
@@ -112,6 +112,28 @@ async fn check_any_uses_the_missing_list() {
         .unwrap());
     assert!(!client
         .check_all("alice", ["docs.read", "docs.write"], "/docs/1")
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn check_any_fails_closed_without_a_missing_list() {
+    // Denied, but the API did not say what is missing: nothing shows that any
+    // one permission is held.
+    let (_fake, builder) = start(|_, _, _| {
+        Reply::ok(CheckPermissionResponse {
+            passed: false,
+            missing_permissions: vec![],
+        })
+    })
+    .await;
+    let client = builder.build().unwrap();
+    assert!(!client
+        .check_any("alice", ["docs.read", "docs.write"], "/docs/1")
+        .await
+        .unwrap());
+    assert!(!client
+        .check_any("alice", ["docs.read"], "/docs/1")
         .await
         .unwrap());
 }
@@ -329,10 +351,7 @@ async fn per_attempt_timeout_is_retried_for_reads() {
 async fn rate_limited_reads_wait_for_the_server_delay() {
     let (fake, builder) = start(|_, _, attempt| {
         if attempt == 0 {
-            Reply::Err(permio::rate_limited_status(
-                "rate limited",
-                Duration::from_millis(150),
-            ))
+            Reply::Err(rate_limited("rate limited", Duration::from_millis(150)))
         } else {
             Reply::Default
         }
@@ -347,13 +366,8 @@ async fn rate_limited_reads_wait_for_the_server_delay() {
 
 #[tokio::test]
 async fn rate_limit_beyond_max_delay_fails_fast() {
-    let (fake, builder) = start(|_, _, _| {
-        Reply::Err(permio::rate_limited_status(
-            "rate limited",
-            Duration::from_secs(5),
-        ))
-    })
-    .await;
+    let (fake, builder) =
+        start(|_, _, _| Reply::Err(rate_limited("rate limited", Duration::from_secs(5)))).await;
     let client = builder.build().unwrap();
     match client.who_am_i().await.unwrap_err() {
         Error::RateLimited { retry_after, .. } => {
@@ -392,11 +406,12 @@ async fn transport_failures_are_unavailable() {
         .api_key(KEY)
         .project("p")
         .endpoint("http://127.0.0.1:1")
-        .retry_config(permio::RetryConfig {
-            max_retries: 1,
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_millis(5),
-        })
+        .retry_config(
+            permio::RetryConfig::default()
+                .max_retries(1)
+                .base_delay(Duration::from_millis(1))
+                .max_delay(Duration::from_millis(5)),
+        )
         .build()
         .unwrap();
     let err = client.check("a", "p", "/a").await.unwrap_err();
@@ -404,7 +419,7 @@ async fn transport_failures_are_unavailable() {
 }
 
 #[tokio::test]
-async fn paginates_until_an_empty_or_repeated_cursor() {
+async fn paginates_until_an_empty_cursor_and_rejects_a_repeated_one() {
     let (fake, builder) = start(|method, req, _| match method {
         "ListPermissions" => {
             let req = req.downcast_ref::<ListPermissionsRequest>().unwrap();
@@ -449,13 +464,24 @@ async fn paginates_until_an_empty_or_repeated_cursor() {
         Some("c2")
     );
 
-    // A cursor that repeats stops instead of looping forever.
-    let roles: Vec<Role> = client
-        .list_roles(ListOptions::default())
-        .try_collect()
-        .await
-        .unwrap();
-    assert_eq!(roles.len(), 2);
+    // A cursor that repeats would loop forever; ending quietly would pass a
+    // truncated listing off as complete, so it is an error.
+    let mut roles = client.list_roles(ListOptions::default());
+    let mut items = 0;
+    let err = loop {
+        match roles.try_next().await {
+            Ok(Some(_)) => items += 1,
+            Ok(None) => panic!("a repeated cursor must not end the listing quietly"),
+            Err(e) => break e,
+        }
+    };
+    assert_eq!(items, 1);
+    assert!(matches!(err, Error::Other { status: None, .. }), "{err:?}");
+    assert!(err.to_string().contains("returned twice"), "{err}");
+    assert_eq!(
+        fake.methods().iter().filter(|m| **m == "ListRoles").count(),
+        2
+    );
 
     // Empty listings and a missing project.
     let principals: Vec<String> = client
@@ -561,7 +587,7 @@ async fn list_access_merges_pages() {
     .await;
     let client = builder.build().unwrap();
     let access = client
-        .list_access("alice", "docs.read", "/docs")
+        .list_access(ListAccess::new("alice", "docs.read", "/docs"))
         .await
         .unwrap();
     assert_eq!(access.to_prefixes(), vec!["/docs/1"]);
@@ -752,4 +778,376 @@ async fn raw_clients_share_auth_and_retries() {
         .await
         .unwrap_err();
     assert!(matches!(Error::from(err), Error::Unavailable { .. }));
+}
+
+#[tokio::test]
+async fn rate_limited_writes_are_not_retried() {
+    let (fake, builder) =
+        start(|_, _, _| Reply::Err(rate_limited("rate limited", Duration::from_millis(10)))).await;
+    let client = builder.build().unwrap();
+    let err = client
+        .grant(Grant::new("alice", "/a").permission("p"))
+        .await
+        .unwrap_err();
+    match err {
+        Error::RateLimited { retry_after, .. } => {
+            assert_eq!(retry_after, Some(Duration::from_millis(10)));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let err = client.groups().delete("editors").await.unwrap_err();
+    assert!(matches!(err, Error::RateLimited { .. }), "{err:?}");
+    assert_eq!(fake.methods(), vec!["Grant", "DeleteGroup"]);
+}
+
+#[tokio::test]
+async fn rate_limit_retry_after_http_date() {
+    let (fake, builder) = start(|_, _, attempt| {
+        if attempt == 0 {
+            let mut s = Status::resource_exhausted("slow down");
+            // A date in the past: retry straight away.
+            s.metadata_mut().insert(
+                "retry-after",
+                "Sun, 06 Nov 1994 08:49:37 GMT".parse().unwrap(),
+            );
+            Reply::Err(s)
+        } else {
+            Reply::Default
+        }
+    })
+    .await;
+    let client = builder.build().unwrap();
+    client.who_am_i().await.unwrap();
+    assert_eq!(fake.methods().len(), 2);
+}
+
+/// A server that never answers in time: every attempt sleeps for 10 s.
+async fn hung() -> (support::Fake, permio::ClientBuilder) {
+    start(|_, _, _| Reply::Sleep(Duration::from_secs(10), Box::new(Reply::Default))).await
+}
+
+#[tokio::test]
+async fn call_timeout_bounds_a_read_across_retries() {
+    // Per attempt 200 ms, two retries: without an overall deadline this takes
+    // ~600 ms. A 250 ms per-call timeout cuts the second attempt short.
+    let (fake, builder) = hung().await;
+    let client = builder.timeout(Duration::from_millis(200)).build().unwrap();
+    let started = Instant::now();
+    let err = client
+        .check_detailed(
+            Check::new("a")
+                .permission("p")
+                .resource("/a")
+                .timeout(Duration::from_millis(250)),
+        )
+        .await
+        .unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(matches!(err, Error::Timeout { .. }), "{err:?}");
+    assert!(
+        err.message().contains("overall timeout"),
+        "{}",
+        err.message()
+    );
+    assert!(elapsed >= Duration::from_millis(250), "{elapsed:?}");
+    assert!(elapsed < Duration::from_millis(450), "{elapsed:?}");
+    // The first attempt timed out after 200 ms and was retried.
+    assert_eq!(fake.methods(), vec!["Check", "Check"]);
+}
+
+#[tokio::test]
+async fn call_timeout_still_allows_a_retry_that_succeeds() {
+    let (fake, builder) = start(|_, _, attempt| {
+        let answer = Reply::ok(CheckPermissionResponse {
+            passed: true,
+            missing_permissions: vec![],
+        });
+        if attempt == 0 {
+            Reply::Sleep(Duration::from_secs(10), Box::new(answer))
+        } else {
+            answer
+        }
+    })
+    .await;
+    let client = builder
+        .timeout(Duration::from_millis(100))
+        .call_timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    assert!(client.check("a", "p", "/a").await.unwrap());
+    assert_eq!(fake.methods().len(), 2);
+}
+
+#[tokio::test]
+async fn client_call_timeout_is_the_default_and_calls_override_it() {
+    let (fake, builder) = hung().await;
+    let client = builder
+        .timeout(Duration::ZERO)
+        .call_timeout(Duration::from_millis(150))
+        .build()
+        .unwrap();
+
+    // The client default applies to helpers and raw clients alike.
+    let started = Instant::now();
+    let err = client.who_am_i().await.unwrap_err();
+    assert!(matches!(err, Error::Timeout { .. }), "{err:?}");
+    assert!(started.elapsed() < Duration::from_millis(400));
+    let started = Instant::now();
+    let err = client
+        .raw_permissions()
+        .who_am_i(WhoAmIRequest {})
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::DeadlineExceeded);
+    assert!(started.elapsed() < Duration::from_millis(400));
+
+    // A per-call timeout overrides it, longer or shorter.
+    let started = Instant::now();
+    let err = client
+        .grant(
+            Grant::new("alice", "/a")
+                .permission("p")
+                .timeout(Duration::from_millis(400)),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Timeout { .. }), "{err:?}");
+    assert!(started.elapsed() >= Duration::from_millis(400));
+
+    // On a raw call, through the request extension.
+    let started = Instant::now();
+    let mut req = tonic::Request::new(WhoAmIRequest {});
+    req.extensions_mut()
+        .insert(permio::CallTimeout::new(Duration::from_millis(50)));
+    let err = client.raw_permissions().who_am_i(req).await.unwrap_err();
+    assert_eq!(err.code(), Code::DeadlineExceeded);
+    assert!(started.elapsed() < Duration::from_millis(140));
+
+    // with_call_timeout, and Groups::timeout.
+    let started = Instant::now();
+    let quick = client.with_call_timeout(Duration::from_millis(50));
+    assert!(quick.who_am_i().await.is_err());
+    assert!(quick.groups().get("editors").await.is_err());
+    assert!(started.elapsed() < Duration::from_millis(280));
+    let started = Instant::now();
+    assert!(client
+        .groups()
+        .timeout(Duration::from_millis(50))
+        .delete("editors")
+        .await
+        .is_err());
+    assert!(started.elapsed() < Duration::from_millis(140));
+
+    // List streams: per page request.
+    let started = Instant::now();
+    let err = client
+        .list_roles(ListOptions::new().timeout(Duration::from_millis(50)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Timeout { .. }), "{err:?}");
+    assert!(started.elapsed() < Duration::from_millis(140));
+    // Writes still went out once each.
+    assert_eq!(
+        fake.methods()
+            .iter()
+            .filter(|m| matches!(**m, "Grant" | "DeleteGroup"))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn batch_check_has_at_most_four_calls_in_flight() {
+    use std::sync::{Arc, Mutex};
+    let starts: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    let record = starts.clone();
+    let (fake, builder) = start(move |_, req, _| {
+        record.lock().unwrap().push(Instant::now());
+        let req = req.downcast_ref::<BatchCheckRequest>().unwrap();
+        let results = req
+            .resource_uris
+            .iter()
+            .map(|u| BatchCheckResult {
+                resource_uri: u.clone(),
+                allowed: true,
+                missing_permissions: vec![],
+            })
+            .collect();
+        Reply::Sleep(
+            Duration::from_millis(100),
+            Box::new(Reply::ok(BatchCheckResponse { results })),
+        )
+    })
+    .await;
+    let client = builder.build().unwrap();
+    let resources: Vec<String> = (0..1000).map(|i| format!("/docs/{i}")).collect();
+    let result = client
+        .batch_check(
+            BatchCheck::new("alice")
+                .permission("p")
+                .resources(resources),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 1000);
+    assert_eq!(fake.methods().len(), 10);
+    let mut starts = starts.lock().unwrap().clone();
+    starts.sort();
+    // The fifth call starts only once one of the first four has finished.
+    for i in 0..starts.len() - 4 {
+        let gap = starts[i + 4] - starts[i];
+        assert!(
+            gap >= Duration::from_millis(90),
+            "calls {i} and {}: {gap:?}",
+            i + 4
+        );
+    }
+}
+
+fn project_of(call: &Call) -> String {
+    macro_rules! try_types {
+        ($($t:ty),*) => {
+            $(if let Some(r) = call.request.downcast_ref::<$t>() {
+                return r.project_name.clone();
+            })*
+        };
+    }
+    try_types!(
+        GrantUserPermissionsAndRolesOnResourceRequest,
+        RevokeUserPermissionsAndRolesOnResourceRequest,
+        CheckPermissionRequest,
+        BatchCheckRequest,
+        ListAccessRequest,
+        ListPrincipalsWithAccessRequest,
+        ListPermissionsRequest,
+        ListRolesRequest,
+        ListPrincipalsRequest,
+        GetAllAssignmentsForPrincipalRequest,
+        CreateGroupRequest,
+        GetGroupRequest,
+        UpdateGroupRequest,
+        DeleteGroupRequest,
+        ListGroupsRequest,
+        AddGroupMembersRequest,
+        RemoveGroupMembersRequest,
+        ListGroupMembersRequest,
+        ListGroupsForPrincipalRequest
+    );
+    panic!("unknown request type for {}", call.method)
+}
+
+#[tokio::test]
+async fn every_call_takes_a_project() {
+    let (fake, builder) = start(|method, req, _| match method {
+        "BatchCheck" => {
+            let req = req.downcast_ref::<BatchCheckRequest>().unwrap();
+            Reply::ok(BatchCheckResponse {
+                results: req
+                    .resource_uris
+                    .iter()
+                    .map(|u| BatchCheckResult {
+                        resource_uri: u.clone(),
+                        allowed: true,
+                        missing_permissions: vec![],
+                    })
+                    .collect(),
+            })
+        }
+        _ => Reply::Default,
+    })
+    .await;
+    let client = builder.build().unwrap();
+    let other = ListOptions::new().project("other");
+    client
+        .grant(Grant::new("alice", "/a").permission("p").project("other"))
+        .await
+        .unwrap();
+    client
+        .revoke(Grant::new("alice", "/a").permission("p").project("other"))
+        .await
+        .unwrap();
+    client
+        .check_detailed(
+            Check::new("a")
+                .permission("p")
+                .resource("/a")
+                .project("other"),
+        )
+        .await
+        .unwrap();
+    client
+        .batch_check(
+            BatchCheck::new("a")
+                .permission("p")
+                .resource("/a")
+                .project("other"),
+        )
+        .await
+        .unwrap();
+    client
+        .list_access(ListAccess::new("alice", "p", "/a").project("other"))
+        .await
+        .unwrap();
+    client
+        .who_has_access(WhoHasAccess::new("/a").project("other"))
+        .await
+        .unwrap();
+    let _: Vec<_> = client
+        .list_permissions(other.clone())
+        .try_collect()
+        .await
+        .unwrap();
+    let _: Vec<_> = client
+        .list_roles(other.clone())
+        .try_collect()
+        .await
+        .unwrap();
+    let _: Vec<_> = client
+        .list_principals(other.clone())
+        .try_collect()
+        .await
+        .unwrap();
+    let _: Vec<_> = client
+        .list_assignments("alice", other.clone())
+        .try_collect()
+        .await
+        .unwrap();
+    let groups = client.groups().project("other");
+    groups.create("editors", None).await.unwrap();
+    groups.get("editors").await.unwrap();
+    groups.update("editors", "d").await.unwrap();
+    groups.add_members("editors", ["bob"]).await.unwrap();
+    groups.remove_members("editors", ["bob"]).await.unwrap();
+    groups.delete("editors").await.unwrap();
+    let _: Vec<_> = groups.list(ListOptions::new()).try_collect().await.unwrap();
+    let _: Vec<_> = groups
+        .list_members("editors", ListOptions::new())
+        .try_collect()
+        .await
+        .unwrap();
+    // ListOptions::project wins over the handle's.
+    let _: Vec<_> = client
+        .groups()
+        .project("ignored")
+        .list_for_principal("bob", other.clone())
+        .try_collect()
+        .await
+        .unwrap();
+
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 19);
+    for call in &calls {
+        assert_eq!(project_of(call), "other", "{}", call.method);
+    }
+
+    // Without one, the client's default project is used.
+    client.groups().get("editors").await.unwrap();
+    client
+        .grant(Grant::new("alice", "/a").permission("p"))
+        .await
+        .unwrap();
+    let calls = fake.calls();
+    assert_eq!(project_of(&calls[19]), "proj");
+    assert_eq!(project_of(&calls[20]), "proj");
 }

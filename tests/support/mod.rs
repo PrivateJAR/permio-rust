@@ -170,12 +170,53 @@ where
         .api_key(KEY)
         .project("proj")
         .channel(channel)
-        .retry_config(permio::RetryConfig {
-            max_retries: 2,
-            base_delay: Duration::from_millis(5),
-            max_delay: Duration::from_millis(200),
-        });
+        .retry_config(
+            permio::RetryConfig::default()
+                .max_retries(2)
+                .base_delay(Duration::from_millis(5))
+                .max_delay(Duration::from_millis(200)),
+        );
     (fake, builder)
+}
+
+/// A `ResourceExhausted` status carrying a `google.rpc.RetryInfo` detail, the
+/// way the perms.io API reports rate limiting. Encoded with the crate's
+/// `prost` / `prost-types` re-exports.
+pub fn rate_limited(message: &str, retry_after: Duration) -> Status {
+    use permio::prost::Message;
+
+    #[derive(Clone, PartialEq, permio::prost::Message)]
+    #[prost(prost_path = "permio::prost")]
+    struct RpcStatus {
+        #[prost(int32, tag = "1")]
+        code: i32,
+        #[prost(string, tag = "2")]
+        message: String,
+        #[prost(message, repeated, tag = "3")]
+        details: Vec<permio::prost_types::Any>,
+    }
+    #[derive(Clone, PartialEq, permio::prost::Message)]
+    #[prost(prost_path = "permio::prost")]
+    struct RetryInfo {
+        #[prost(message, optional, tag = "1")]
+        retry_delay: Option<permio::prost_types::Duration>,
+    }
+    let info = RetryInfo {
+        retry_delay: Some(permio::prost_types::Duration {
+            seconds: i64::try_from(retry_after.as_secs()).unwrap(),
+            nanos: i32::try_from(retry_after.subsec_nanos()).unwrap(),
+        }),
+    };
+    let details = RpcStatus {
+        code: tonic::Code::ResourceExhausted as i32,
+        message: message.to_string(),
+        details: vec![permio::prost_types::Any {
+            type_url: "type.googleapis.com/google.rpc.RetryInfo".into(),
+            value: info.encode_to_vec(),
+        }],
+    }
+    .encode_to_vec();
+    Status::with_details(tonic::Code::ResourceExhausted, message, details.into())
 }
 
 /// Starts the fake on a local port and returns a channel connected to it.
