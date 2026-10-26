@@ -1,37 +1,43 @@
-//! Builds an authenticated PermissionsService client.
+//! Checks a permission, then lists the project's roles through the raw client.
 //!
-//! Run with: PERMIO_API_KEY=... cargo run --example client --features tls
-use permio_rust::permissions::v1::permissions_service_client::PermissionsServiceClient;
-use permio_rust::permissions::v1::CheckPermissionRequest;
-use tonic::metadata::MetadataValue;
-use tonic::transport::Channel;
-use tonic::Request;
+//! Run with: PERMIO_API_KEY=perms_... cargo run --example client -- my-project
+//! (add PERMIO_ENDPOINT=https://dev-api.perms.io for the development API).
+use futures_util::TryStreamExt;
+use permio::raw::permissions::v1::ListRolesRequest;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("PERMIO_API_KEY").unwrap_or_default();
-    let bearer: MetadataValue<_> = format!("Bearer {api_key}").parse()?;
-
-    // connect_lazy does not touch the network until the first request.
-    let channel = Channel::from_static("https://api.perms.io").connect_lazy();
-    let mut client = PermissionsServiceClient::with_interceptor(channel, move |mut req: Request<()>| {
-        req.metadata_mut().insert("authorization", bearer.clone());
-        Ok(req)
-    });
-
-    if api_key.is_empty() {
-        println!("client built; set PERMIO_API_KEY to send a request");
+async fn main() -> Result<(), permio::Error> {
+    let project = std::env::args().nth(1).unwrap_or_else(|| "default".into());
+    let mut builder = permio::Client::builder().project(project.clone());
+    if let Ok(endpoint) = std::env::var("PERMIO_ENDPOINT") {
+        builder = builder.endpoint(endpoint);
+    }
+    if std::env::var(permio::API_KEY_ENV).is_err() {
+        println!("set PERMIO_API_KEY to run this example");
         return Ok(());
     }
+    let client = builder.build()?;
 
-    let res = client
-        .check(CheckPermissionRequest {
-            project_name: "my-project".into(),
-            principal_id: "user-123".into(),
-            resource_uris: vec!["/documents/42".into()],
-            permissions: vec!["document.read".into()],
+    let me = client.who_am_i().await?;
+    println!("calling as {} ({:?})", me.principal_id, me.kind);
+
+    let doc = permio::resource!("documents", 42)?;
+    let allowed = client.check("user-123", "document.read", &doc).await?;
+    println!("user-123 may read {doc}: {allowed}");
+
+    // The helpers stream every page:
+    let roles: Vec<_> = client.list_roles(Default::default()).try_collect().await?;
+    println!("{} roles", roles.len());
+
+    // The raw client covers every RPC, with the same auth, timeouts and retries:
+    let first_page = client
+        .raw_permissions()
+        .list_roles(ListRolesRequest {
+            project_name: project,
+            ..Default::default()
         })
-        .await?;
-    println!("passed: {}", res.into_inner().passed);
+        .await?
+        .into_inner();
+    println!("first page: {} roles", first_page.roles.len());
     Ok(())
 }
