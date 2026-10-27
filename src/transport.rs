@@ -168,6 +168,21 @@ const IDEMPOTENT_METHODS: &[&str] = &[
     "permio.organisation.v1.OrganisationService.GetOrganisationDashboard",
 ];
 
+// Paginated RPCs: each attempt uses the client's list timeout instead of its
+// per-attempt timeout.
+const PAGINATED_METHODS: &[&str] = &[
+    "permio.permissions.v1.PermissionsService.ListPermissions",
+    "permio.permissions.v1.PermissionsService.ListRoles",
+    "permio.permissions.v1.PermissionsService.ListPrincipals",
+    "permio.permissions.v1.PermissionsService.GetAllAssignmentsForPrincipal",
+    "permio.permissions.v1.PermissionsService.ListAccess",
+    "permio.permissions.v1.PermissionsService.ListPrincipalsWithAccess",
+    "permio.permissions.v1.PermissionsService.ListGroups",
+    "permio.permissions.v1.PermissionsService.ListGroupMembers",
+    "permio.permissions.v1.PermissionsService.ListGroupsForPrincipal",
+    "permio.organisation.v1.OrganisationService.ListAPIKeys",
+];
+
 /// Whether the SDK retries this RPC, by fully qualified
 /// `package.Service.Method` name (e.g. `permio.permissions.v1.PermissionsService.Check`).
 #[must_use]
@@ -186,6 +201,7 @@ pub struct Transport {
     inner: Channel,
     authorization: HeaderValue,
     timeout: Option<Duration>,
+    list_timeout: Option<Duration>,
     call_timeout: Option<Duration>,
     retry: RetryConfig,
 }
@@ -195,6 +211,7 @@ impl fmt::Debug for Transport {
         f.debug_struct("Transport")
             .field("authorization", &"Bearer <redacted>")
             .field("timeout", &self.timeout)
+            .field("list_timeout", &self.list_timeout)
             .field("call_timeout", &self.call_timeout)
             .field("retry", &self.retry)
             .finish_non_exhaustive()
@@ -206,6 +223,7 @@ impl Transport {
         inner: Channel,
         authorization: HeaderValue,
         timeout: Option<Duration>,
+        list_timeout: Option<Duration>,
         call_timeout: Option<Duration>,
         retry: RetryConfig,
     ) -> Self {
@@ -213,6 +231,7 @@ impl Transport {
             inner,
             authorization,
             timeout,
+            list_timeout,
             call_timeout,
             retry,
         }
@@ -256,10 +275,16 @@ impl Transport {
             .filter(|d| !d.is_zero());
         let deadline = overall.map(|d| (d, Instant::now() + d));
 
+        let per_attempt = if PAGINATED_METHODS.contains(&method.as_str()) {
+            self.list_timeout
+        } else {
+            self.timeout
+        };
+
         let mut attempt: u32 = 0;
         loop {
             let req = http::Request::from_parts(parts.clone(), Body::new(Full::new(body.clone())));
-            let status = match self.attempt(req, deadline).await {
+            let status = match self.attempt(req, per_attempt, deadline).await {
                 Ok(Outcome::Ok(response)) => return Ok(response),
                 Ok(Outcome::Failed(status)) | Err(status) => status,
             };
@@ -313,6 +338,7 @@ impl Transport {
     async fn attempt(
         &self,
         req: http::Request<Body>,
+        per_attempt: Option<Duration>,
         deadline: Option<(Duration, Instant)>,
     ) -> Result<Outcome, Status> {
         let mut svc = self.inner.clone();
@@ -325,7 +351,7 @@ impl Transport {
             let collected = body.collect().await.map_err(transport_status)?;
             Ok::<_, Status>(finish(parts, collected))
         };
-        let per_attempt = self.timeout.map(|limit| {
+        let per_attempt = per_attempt.map(|limit| {
             (
                 Instant::now() + limit,
                 Status::deadline_exceeded(format!("request timed out after {limit:?}")),

@@ -14,7 +14,11 @@
 //!   [`check_any`](Client::check_any), [`check_detailed`](Client::check_detailed),
 //!   [`assert`](Client::assert), [`batch_check`](Client::batch_check)), access
 //!   queries ([`list_access`](Client::list_access),
-//!   [`who_has_access`](Client::who_has_access)), [`grant`](Client::grant) /
+//!   [`who_has_access`](Client::who_has_access), capped at 10,000 results,
+//!   and their uncapped streaming forms
+//!   [`list_access_stream`](Client::list_access_stream) /
+//!   [`who_has_access_stream`](Client::who_has_access_stream)),
+//!   [`grant`](Client::grant) /
 //!   [`revoke`](Client::revoke), paginated listings as [`ListStream`]s,
 //!   [`groups`](Client::groups) and [`who_am_i`](Client::who_am_i).
 //! - [`Error`]: one enum with a variant per failure kind.
@@ -50,7 +54,7 @@ pub use apikey::{is_valid_api_key, validate_api_key, ApiKeyKind, API_KEY_LENGTH}
 pub use client::{
     ApiKeyAccess, BatchCheck, BatchCheckEntry, Check, CheckResult, Client, ClientBuilder, Grant,
     ListAccess, PrincipalKind, WhoAmI, WhoHasAccess, API_KEY_ENV, DEFAULT_ENDPOINT,
-    DEFAULT_TIMEOUT, DEV_ENDPOINT,
+    DEFAULT_MAX_BATCH_RESOURCES, DEFAULT_MAX_RESULTS, DEFAULT_TIMEOUT, DEV_ENDPOINT,
 };
 pub use error::{parse_missing_permissions, server_retry_delay, Error, MissingPermission};
 pub use groups::{group, AddMembersResult, Groups, RemoveMembersResult, GROUP_PRINCIPAL_PREFIX};

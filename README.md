@@ -59,6 +59,7 @@ let client = permio::Client::builder()
     .project("my-app")                  // default project for every call
     .timeout(Duration::from_secs(5))    // per attempt; default 10 s, Duration::ZERO disables
     .call_timeout(Duration::from_secs(8)) // overall per call, across retries; default none
+    .list_timeout(Duration::from_secs(30)) // per attempt for list pages; default: same as timeout
     .retries(3)                         // idempotent reads only; default 2 (see RetryConfig for delays)
     .build()?;                          // must run inside a Tokio runtime; connects lazily
 
@@ -128,6 +129,13 @@ let entries = client
 let visible: Vec<_> = entries.iter().filter(|e| e.allowed).map(|e| &e.resource).collect();
 ```
 
+`batch_check` accepts at most 10,000 resources per call (counted as given,
+before de-duplication; `permio::DEFAULT_MAX_BATCH_RESOURCES`). More is an
+`Error::Validation` before anything is sent; raise it with
+`BatchCheck::max_resources(n)` or split the call. The calls of 100 are built
+as they are sent, results keep request order, and the first failing call
+stops further calls from being sent.
+
 Grants apply to the URI and everything below it; a `_` segment in a grant
 matches exactly one segment.
 
@@ -186,6 +194,33 @@ let who = client
     .await?;                               // Vec<AccessEntry { principal, is_group, via_group, via }>
 ```
 
+### Large results: caps and streaming
+
+A resource can have millions of principals with access, so the collect-all
+forms are capped: `who_has_access` and `list_access` return
+`Error::TooManyResults { max_results, .. }` when there are more than
+`max_results` results (default 10,000, `permio::DEFAULT_MAX_RESULTS`). They
+stop paging as soon as the cap is exceeded, fetching at most
+`max_results + 1` items. Raise the cap with `.max_results(n)` on
+`WhoHasAccess` / `ListAccess`, or stream instead:
+
+```rust
+use futures_util::TryStreamExt;
+
+let mut who = client.who_has_access_stream(permio::WhoHasAccess::new("/docs/42"));
+while let Some(entry) = who.try_next().await? {
+    // one page (up to 100 entries) in memory at a time
+}
+
+let mut scopes = client.list_access_stream(permio::ListAccess::new("alice", "docs.read", "/docs"));
+while let Some(scope) = scopes.try_next().await? {
+    // covers-all is a single ScopeKind::Subtree scope whose uri is "/docs"
+}
+```
+
+The streams are `ListStream`s like every other listing: pages are fetched as
+you poll, dropping the stream stops, and `max_results` is ignored.
+
 ## Listing
 
 List endpoints return a `permio::ListStream<T>` (a boxed `futures::Stream`)
@@ -222,6 +257,7 @@ Every fallible call returns `Result<_, permio::Error>`:
 | `Timeout` | Per-attempt or overall (`call_timeout` / `timeout`) deadline passed, or `DeadlineExceeded` |
 | `RateLimited { retry_after, .. }` | Rate limit used up (`ResourceExhausted`, or HTTP 429 from the gateway), with the server's requested delay |
 | `Denied { principal, missing, .. }` | Only from `assert*`: the principal lacks the permission |
+| `TooManyResults { max_results, .. }` | `who_has_access` / `list_access` found more than `max_results` (default 10,000); use the `_stream` form or raise the cap |
 | `Other` | Any other gRPC code (e.g. `AlreadyExists`), or an inconsistent API response |
 
 `err.code()` gives the gRPC code, `err.message()` the server's message and
@@ -239,6 +275,13 @@ rate-limited read is retried after the server's `RetryInfo` / `retry-after`
 delay (seconds or an HTTP-date) when that is at most `max_delay`; otherwise
 `Error::RateLimited` is returned with `retry_after` set. Writes (create,
 update, delete, grant, revoke, ...) are sent exactly once, rate limited or not.
+
+List pages (every paginated RPC: listings, `who_has_access`, `list_access`,
+their streams and raw list calls) use `.list_timeout(d)` per attempt instead
+of `timeout` when it is set, so slow large pages can get more time without
+loosening checks. A `DeadlineExceeded` page is retried only after the
+jittered backoff, never immediately, and a rate-limited page waits for the
+server's `retry-after`.
 
 Without an overall deadline a read against a hung backend can take
 `(retries + 1) × timeout` plus backoff (about 30 s by default). Set one with
