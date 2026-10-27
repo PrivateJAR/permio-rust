@@ -127,28 +127,61 @@ where
     F: FnMut(PaginationRequest) -> Fut + Send + 'static,
     Fut: Future<Output = Result<(Vec<T>, Option<PaginationResponse>), Error>> + Send + 'static,
 {
+    paginate_capped(page_size, None, |items: &Vec<T>| items.len(), fetch)
+        .map_ok(|items| stream::iter(items.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
+}
+
+/// Streams the pages of a list RPC. With `budget`, each page request asks for
+/// at most the items still in the budget (as counted by `count`), and the
+/// stream ends once the budget is used up, so at most `budget` items are ever
+/// requested.
+pub(crate) fn paginate_capped<P, F, Fut, C>(
+    page_size: u32,
+    budget: Option<usize>,
+    count: C,
+    fetch: F,
+) -> ListStream<P>
+where
+    P: Send + 'static,
+    F: FnMut(PaginationRequest) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(P, Option<PaginationResponse>), Error>> + Send + 'static,
+    C: Fn(&P) -> usize + Send + 'static,
+{
     let limit = ListOptions::new().page_size(page_size).limit();
-    struct State<F> {
+    struct State<F, C> {
         fetch: F,
+        count: C,
         cursor: Option<String>,
         seen: HashSet<String>,
+        remaining: Option<usize>,
         done: bool,
     }
     let state = State {
         fetch,
+        count,
         cursor: None,
         seen: HashSet::new(),
+        remaining: budget,
         done: false,
     };
-    let pages = stream::try_unfold(state, move |mut state| async move {
-        if state.done {
+    stream::try_unfold(state, move |mut state| async move {
+        if state.done || state.remaining == Some(0) {
             return Ok::<_, Error>(None);
         }
+        let limit = match state.remaining {
+            Some(r) => limit.min(i32::try_from(r).unwrap_or(i32::MAX)),
+            None => limit,
+        };
         let request = PaginationRequest {
             limit: Some(limit),
             cursor: state.cursor.take(),
         };
-        let (items, pagination) = (state.fetch)(request).await?;
+        let (page, pagination) = (state.fetch)(request).await?;
+        if let Some(r) = state.remaining.as_mut() {
+            *r = r.saturating_sub((state.count)(&page));
+        }
         let next = pagination.map(|p| p.next_cursor).unwrap_or_default();
         // An empty cursor ends the listing. A repeated one would loop forever;
         // ending quietly would return a truncated listing as if complete.
@@ -161,12 +194,27 @@ where
         } else {
             state.cursor = Some(next);
         }
-        Ok(Some((items, state)))
-    });
-    pages
-        .map_ok(|items| stream::iter(items.into_iter().map(Ok)))
-        .try_flatten()
-        .boxed()
+        Ok(Some((page, state)))
+    })
+    .boxed()
+}
+
+/// Collects `stream` into a Vec, failing with [`Error::TooManyResults`] as
+/// soon as it yields more than `max_results` items.
+pub(crate) async fn collect_capped<T>(
+    mut stream: ListStream<T>,
+    max_results: usize,
+    call: &str,
+    streaming: &str,
+) -> Result<Vec<T>, Error> {
+    let mut out = Vec::new();
+    while let Some(item) = stream.try_next().await? {
+        if out.len() >= max_results {
+            return Err(Error::too_many_results(call, streaming, max_results));
+        }
+        out.push(item);
+    }
+    Ok(out)
 }
 
 /// A stream that yields `err` once.

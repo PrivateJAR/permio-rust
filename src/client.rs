@@ -1,6 +1,6 @@
 //! The [`Client`] and its builder.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +13,7 @@ use crate::access::{AccessEntry, AccessScope, AccessScopes, ScopeKind};
 use crate::apikey::{validate_api_key, ApiKeyKind};
 use crate::error::{Error, MissingPermission};
 use crate::groups::Groups;
-use crate::list::{failed, paginate, ListOptions, ListStream};
+use crate::list::{collect_capped, failed, paginate, paginate_capped, ListOptions, ListStream};
 use crate::raw::organisation::v1::organisation_service_client::OrganisationServiceClient;
 use crate::raw::permissions::v1 as pb;
 use crate::raw::permissions::v1::permissions_service_client::PermissionsServiceClient;
@@ -28,6 +28,15 @@ pub const DEV_ENDPOINT: &str = "https://dev-api.perms.io";
 pub const API_KEY_ENV: &str = "PERMIO_API_KEY";
 /// Default per-attempt timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default cap on the results [`Client::who_has_access`] and
+/// [`Client::list_access`] collect into memory; see
+/// [`WhoHasAccess::max_results`] and [`ListAccess::max_results`].
+pub const DEFAULT_MAX_RESULTS: usize = 10_000;
+
+/// Default cap on the resources one [`Client::batch_check`] call accepts; see
+/// [`BatchCheck::max_resources`].
+pub const DEFAULT_MAX_BATCH_RESOURCES: usize = 10_000;
 
 /// Most resources or permissions accepted by one `Check`/`BatchCheck` call.
 const MAX_PER_CALL: usize = 100;
@@ -52,6 +61,7 @@ pub struct ClientBuilder {
     project: Option<String>,
     timeout: Option<Duration>,
     call_timeout: Option<Duration>,
+    list_timeout: Option<Duration>,
     retry: Option<RetryConfig>,
     channel: Option<Channel>,
 }
@@ -64,6 +74,7 @@ impl fmt::Debug for ClientBuilder {
             .field("project", &self.project)
             .field("timeout", &self.timeout)
             .field("call_timeout", &self.call_timeout)
+            .field("list_timeout", &self.list_timeout)
             .field("retry", &self.retry)
             .field("channel", &self.channel.is_some())
             .finish()
@@ -112,6 +123,17 @@ impl ClientBuilder {
     #[must_use]
     pub fn call_timeout(mut self, timeout: Duration) -> Self {
         self.call_timeout = Some(timeout);
+        self
+    }
+
+    /// Timeout per attempt for list page requests (the paginated RPCs behind
+    /// every [`ListStream`], [`Client::who_has_access`] and
+    /// [`Client::list_access`], including raw clients). Defaults to
+    /// [`timeout`](Self::timeout); [`Duration::ZERO`] disables it. Large
+    /// pages can take longer than a check, so this can be set separately.
+    #[must_use]
+    pub fn list_timeout(mut self, timeout: Duration) -> Self {
+        self.list_timeout = Some(timeout);
         self
     }
 
@@ -167,6 +189,10 @@ impl ClientBuilder {
 
         let timeout = self.timeout.unwrap_or(DEFAULT_TIMEOUT);
         let timeout = (!timeout.is_zero()).then_some(timeout);
+        let list_timeout = match self.list_timeout {
+            Some(t) => (!t.is_zero()).then_some(t),
+            None => timeout,
+        };
 
         let endpoint = self
             .endpoint
@@ -181,6 +207,7 @@ impl ClientBuilder {
             channel,
             authorization,
             timeout,
+            list_timeout,
             self.call_timeout.filter(|d| !d.is_zero()),
             self.retry.unwrap_or_default(),
         );
@@ -354,6 +381,7 @@ pub struct BatchCheck {
     permissions: Vec<String>,
     project: Option<String>,
     timeout: Option<Duration>,
+    max_resources: Option<usize>,
 }
 
 impl BatchCheck {
@@ -411,12 +439,22 @@ impl BatchCheck {
         self
     }
 
-    /// Overall deadline for this call, across retries. Overrides the client's
-    /// [`call_timeout`](ClientBuilder::call_timeout); [`Duration::ZERO`]
-    /// means none.
+    /// Overall deadline for each `BatchCheck` request, across its retries.
+    /// Overrides the client's [`call_timeout`](ClientBuilder::call_timeout);
+    /// [`Duration::ZERO`] means none.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Most resources this call accepts, counted as given (before
+    /// de-duplication). Default [`DEFAULT_MAX_BATCH_RESOURCES`] (10,000);
+    /// more is an [`Error::Validation`] before anything is sent. Must be at
+    /// least 1.
+    #[must_use]
+    pub fn max_resources(mut self, max: usize) -> Self {
+        self.max_resources = Some(max);
         self
     }
 }
@@ -443,6 +481,7 @@ pub struct WhoHasAccess {
     page_size: Option<u32>,
     project: Option<String>,
     timeout: Option<Duration>,
+    max_results: Option<usize>,
 }
 
 impl WhoHasAccess {
@@ -469,6 +508,15 @@ impl WhoHasAccess {
     #[must_use]
     pub fn expand_groups(mut self, expand: bool) -> Self {
         self.expand_groups = expand;
+        self
+    }
+
+    /// Most entries [`Client::who_has_access`] collects; more is
+    /// [`Error::TooManyResults`]. Default [`DEFAULT_MAX_RESULTS`] (10,000);
+    /// must be at least 1. Ignored by [`Client::who_has_access_stream`].
+    #[must_use]
+    pub fn max_results(mut self, max: usize) -> Self {
+        self.max_results = Some(max);
         self
     }
 
@@ -503,8 +551,10 @@ pub struct ListAccess {
     principal: String,
     permission: String,
     under: String,
+    page_size: Option<u32>,
     project: Option<String>,
     timeout: Option<Duration>,
+    max_results: Option<usize>,
 }
 
 impl ListAccess {
@@ -521,6 +571,22 @@ impl ListAccess {
             under: under.into(),
             ..ListAccess::default()
         }
+    }
+
+    /// Scopes requested per page (1..=100, default 100).
+    #[must_use]
+    pub fn page_size(mut self, size: u32) -> Self {
+        self.page_size = Some(size);
+        self
+    }
+
+    /// Most scopes [`Client::list_access`] collects; more is
+    /// [`Error::TooManyResults`]. Default [`DEFAULT_MAX_RESULTS`] (10,000);
+    /// must be at least 1. Ignored by [`Client::list_access_stream`].
+    #[must_use]
+    pub fn max_results(mut self, max: usize) -> Self {
+        self.max_results = Some(max);
+        self
     }
 
     /// Uses this project instead of the client's.
@@ -667,13 +733,21 @@ fn non_empty(value: String) -> Option<String> {
 }
 
 fn unique(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::with_capacity(values.len());
     let mut out: Vec<String> = Vec::with_capacity(values.len());
     for v in values {
-        if !out.contains(&v) {
+        if seen.insert(v.clone()) {
             out.push(v);
         }
     }
     out
+}
+
+fn max_results(max: Option<usize>) -> Result<usize, Error> {
+    match max.unwrap_or(DEFAULT_MAX_RESULTS) {
+        0 => Err(Error::validation("permio: max_results must be at least 1")),
+        n => Ok(n),
+    }
 }
 
 // At least one and at most 100 distinct, non-empty values.
@@ -985,12 +1059,30 @@ impl Client {
     /// request order, whether the principal holds every requested permission
     /// on it. Use it to filter a list you already have in memory.
     ///
+    /// Resources are sent in `BatchCheck` requests of 100, built as they are
+    /// sent, with at most four in flight at once. The first failing request
+    /// (in request order) fails the call and no further requests are sent.
+    ///
     /// # Errors
     ///
-    /// [`Error::Permission`] if the API key lacks `permission.check`;
-    /// [`Error::Other`] if the API's answer does not cover every resource.
+    /// [`Error::Validation`] for more than [`BatchCheck::max_resources`]
+    /// resources (default 10,000); [`Error::Permission`] if the API key lacks
+    /// `permission.check`; [`Error::Other`] if the API's answer does not cover
+    /// every resource.
     pub async fn batch_check(&self, batch: BatchCheck) -> Result<Vec<BatchCheckEntry>, Error> {
         require(&batch.principal, "principal")?;
+        let max_resources = batch.max_resources.unwrap_or(DEFAULT_MAX_BATCH_RESOURCES);
+        if max_resources == 0 {
+            return Err(Error::validation(
+                "permio: max_resources must be at least 1",
+            ));
+        }
+        if batch.resources.len() > max_resources {
+            return Err(Error::validation(format!(
+                "permio: batch_check got {} resources, more than max_resources ({max_resources}); split the call or raise max_resources",
+                batch.resources.len()
+            )));
+        }
         let resource_uris = unique(batch.resources);
         if resource_uris.is_empty() {
             return Err(Error::validation(
@@ -1048,6 +1140,9 @@ impl Client {
     /// [`AccessScopes::regex_pattern`] a regex, and [`AccessScopes::allows`]
     /// tests a single URI.
     ///
+    /// Collects at most [`ListAccess::max_results`] scopes (default 10,000);
+    /// use [`list_access_stream`](Self::list_access_stream) for more.
+    ///
     /// ```no_run
     /// # async fn demo(client: permio::Client) -> Result<(), permio::Error> {
     /// let scopes = client
@@ -1058,54 +1153,112 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// [`Error::Permission`] unless the API key has `permission.check` on
-    /// `under` and `principal.assignment.get` on the principal.
+    /// [`Error::TooManyResults`] if there are more than `max_results` scopes
+    /// (at most `max_results + 1` are fetched); [`Error::Permission`] unless
+    /// the API key has `permission.check` on `under` and
+    /// `principal.assignment.get` on the principal.
     pub async fn list_access(&self, query: ListAccess) -> Result<AccessScopes, Error> {
+        let max = max_results(query.max_results)?;
+        let under = query.under.clone();
+        let mut pages = self.list_access_pages(query, Some(max.saturating_add(1)))?;
+        let mut covers_all = false;
+        let mut scopes = Vec::new();
+        while let Some(page) = pages.try_next().await? {
+            covers_all |= page.covers_all;
+            for s in page.scopes {
+                if scopes.len() >= max {
+                    return Err(Error::too_many_results(
+                        "list_access",
+                        "list_access_stream",
+                        max,
+                    ));
+                }
+                scopes.push(AccessScope {
+                    kind: ScopeKind::from_raw(s.scope),
+                    uri: s.uri,
+                });
+            }
+        }
+        Ok(AccessScopes {
+            under,
+            covers_all,
+            scopes,
+        })
+    }
+
+    /// Streams the scopes of [`list_access`](Self::list_access), fetching
+    /// pages as the stream is polled, with no cap. When the principal holds
+    /// the permission on `under` itself, the stream yields exactly one
+    /// [`ScopeKind::Subtree`] scope whose URI is `under` (that is how to
+    /// detect "covers all"). `max_results` is ignored.
+    ///
+    /// ```no_run
+    /// # async fn demo(client: permio::Client) -> Result<(), permio::Error> {
+    /// use futures_util::TryStreamExt;
+    /// let mut scopes = client.list_access_stream(permio::ListAccess::new("alice", "docs.read", "/docs"));
+    /// while let Some(scope) = scopes.try_next().await? {
+    ///     println!("{} {:?}", scope.uri, scope.kind);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn list_access_stream(&self, query: ListAccess) -> ListStream<AccessScope> {
+        match self.list_access_pages(query, None) {
+            Ok(pages) => pages
+                .map_ok(|page| {
+                    futures_util::stream::iter(page.scopes.into_iter().map(|s| {
+                        Ok(AccessScope {
+                            kind: ScopeKind::from_raw(s.scope),
+                            uri: s.uri,
+                        })
+                    }))
+                })
+                .try_flatten()
+                .boxed(),
+            Err(e) => failed(e),
+        }
+    }
+
+    fn list_access_pages(
+        &self,
+        query: ListAccess,
+        budget: Option<usize>,
+    ) -> Result<ListStream<pb::ListAccessResponse>, Error> {
         require(&query.principal, "principal")?;
         require(&query.permission, "permission")?;
         validate_resource_uri(&query.under)?;
         let project_name = self.resolve_project(query.project.as_deref())?;
         let rpc = self.rpc();
-        let (principal, permission, under_uri, timeout) = (
-            query.principal,
-            query.permission,
-            query.under.clone(),
-            query.timeout,
-        );
-        let pages: Vec<pb::ListAccessResponse> = paginate(100, move |pagination| {
-            let mut rpc = rpc.clone();
-            let req = request(
-                pb::ListAccessRequest {
-                    project_name: project_name.clone(),
-                    principal_id: principal.clone(),
-                    permission: permission.clone(),
-                    under_uri: under_uri.clone(),
-                    pagination: Some(pagination),
-                },
-                timeout,
-            );
-            async move {
-                let mut res = rpc.list_access(req).await?.into_inner();
-                let pagination = res.pagination.take();
-                Ok((vec![res], pagination))
-            }
-        })
-        .try_collect()
-        .await?;
-        let mut covers_all = false;
-        let mut scopes = Vec::new();
-        for page in pages {
-            covers_all |= page.covers_all;
-            scopes.extend(page.scopes.into_iter().map(|s| AccessScope {
-                kind: ScopeKind::from_raw(s.scope),
-                uri: s.uri,
-            }));
-        }
-        Ok(AccessScopes {
-            under: query.under,
-            covers_all,
-            scopes,
-        })
+        let page_size = query.page_size.unwrap_or(100);
+        let ListAccess {
+            principal,
+            permission,
+            under,
+            timeout,
+            ..
+        } = query;
+        Ok(paginate_capped(
+            page_size,
+            budget,
+            |page: &pb::ListAccessResponse| page.scopes.len(),
+            move |pagination| {
+                let mut rpc = rpc.clone();
+                let req = request(
+                    pb::ListAccessRequest {
+                        project_name: project_name.clone(),
+                        principal_id: principal.clone(),
+                        permission: permission.clone(),
+                        under_uri: under.clone(),
+                        pagination: Some(pagination),
+                    },
+                    timeout,
+                );
+                async move {
+                    let mut res = rpc.list_access(req).await?.into_inner();
+                    let pagination = res.pagination.take();
+                    Ok((res, pagination))
+                }
+            },
+        ))
     }
 
     /// Answers "who has access to this resource?" (`ListPrincipalsWithAccess`),
@@ -1114,11 +1267,47 @@ impl Client {
     /// `_` wildcard URI matching it, ordered by principal ID, with the grants
     /// that give the access.
     ///
+    /// Collects at most [`WhoHasAccess::max_results`] entries (default
+    /// 10,000); a resource can have millions, so use
+    /// [`who_has_access_stream`](Self::who_has_access_stream) when there may
+    /// be more.
+    ///
     /// # Errors
     ///
-    /// [`Error::Permission`] unless the API key has `principal.list` and
-    /// `principal.assignment.list` on the project.
+    /// [`Error::TooManyResults`] if there are more than `max_results` entries
+    /// (at most `max_results + 1` are fetched); [`Error::Permission`] unless
+    /// the API key has `principal.list` and `principal.assignment.list` on the
+    /// project.
     pub async fn who_has_access(&self, query: WhoHasAccess) -> Result<Vec<AccessEntry>, Error> {
+        let max = max_results(query.max_results)?;
+        let stream = self.who_has_access_pages(query, Some(max.saturating_add(1)))?;
+        collect_capped(stream, max, "who_has_access", "who_has_access_stream").await
+    }
+
+    /// Streams the entries of [`who_has_access`](Self::who_has_access),
+    /// fetching pages as the stream is polled, with no cap; memory stays at
+    /// one page however many principals have access. `max_results` is
+    /// ignored.
+    ///
+    /// ```no_run
+    /// # async fn demo(client: permio::Client) -> Result<(), permio::Error> {
+    /// use futures_util::TryStreamExt;
+    /// let mut entries = client.who_has_access_stream(permio::WhoHasAccess::new("/docs/42"));
+    /// while let Some(entry) = entries.try_next().await? {
+    ///     println!("{}", entry.principal);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn who_has_access_stream(&self, query: WhoHasAccess) -> ListStream<AccessEntry> {
+        self.who_has_access_pages(query, None)
+            .unwrap_or_else(failed)
+    }
+
+    fn who_has_access_pages(
+        &self,
+        query: WhoHasAccess,
+        budget: Option<usize>,
+    ) -> Result<ListStream<AccessEntry>, Error> {
         validate_resource_uri(&query.resource)?;
         if query.permission.as_deref() == Some("") {
             return Err(Error::validation("permio: permission must not be empty"));
@@ -1126,26 +1315,30 @@ impl Client {
         let project_name = self.resolve_project(query.project.as_deref())?;
         let rpc = self.rpc();
         let page_size = query.page_size.unwrap_or(100);
-        paginate(page_size, move |pagination| {
-            let mut rpc = rpc.clone();
-            let req = request(
-                pb::ListPrincipalsWithAccessRequest {
-                    project_name: project_name.clone(),
-                    resource_uri: query.resource.clone(),
-                    permission: query.permission.clone(),
-                    expand_groups: query.expand_groups,
-                    pagination: Some(pagination),
-                },
-                query.timeout,
-            );
-            async move {
-                let res = rpc.list_principals_with_access(req).await?.into_inner();
-                Ok((res.principals, res.pagination))
-            }
-        })
-        .map_ok(AccessEntry::from)
-        .try_collect()
-        .await
+        Ok(
+            paginate_capped(page_size, budget, Vec::len, move |pagination| {
+                let mut rpc = rpc.clone();
+                let req = request(
+                    pb::ListPrincipalsWithAccessRequest {
+                        project_name: project_name.clone(),
+                        resource_uri: query.resource.clone(),
+                        permission: query.permission.clone(),
+                        expand_groups: query.expand_groups,
+                        pagination: Some(pagination),
+                    },
+                    query.timeout,
+                );
+                async move {
+                    let res = rpc.list_principals_with_access(req).await?.into_inner();
+                    Ok((res.principals, res.pagination))
+                }
+            })
+            .map_ok(|page| {
+                futures_util::stream::iter(page.into_iter().map(|p| Ok(AccessEntry::from(p))))
+            })
+            .try_flatten()
+            .boxed(),
+        )
     }
 
     /// Streams every permission in the project (`options.project`, else the

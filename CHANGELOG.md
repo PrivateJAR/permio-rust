@@ -18,7 +18,17 @@ The first release of the hand-written SDK. The crate is renamed from
   `assert_detailed`, `batch_check` (split into concurrent calls above 100
   resources, fails closed).
 - `list_access` (`AccessScopes` with `allows`, `to_prefixes`, `patterns`,
-  `regex_pattern`) and `who_has_access`.
+  `regex_pattern`) and `who_has_access`, capped at `max_results` results
+  (default 10,000, `DEFAULT_MAX_RESULTS`): more is the new
+  `Error::TooManyResults` after fetching at most `max_results + 1` items.
+  This is a behaviour change from earlier development builds, which collected
+  every page.
+- Uncapped, lazily paged `who_has_access_stream` and `list_access_stream`
+  (`ListStream<AccessEntry>` / `ListStream<AccessScope>`).
+- `batch_check` accepts at most `BatchCheck::max_resources` resources (default
+  10,000, `DEFAULT_MAX_BATCH_RESOURCES`), else `Error::Validation`.
+- `ClientBuilder::list_timeout`: per-attempt timeout for list pages (default:
+  the client timeout). `ListAccess::page_size`.
 - `grant` / `revoke`, `who_am_i`.
 - Groups: create, get, update, delete, list, add/remove members, list members,
   list a principal's groups; `group()` principal helper.

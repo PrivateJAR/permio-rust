@@ -155,6 +155,22 @@ pub enum Error {
         missing: Vec<MissingPermission>,
     },
 
+    /// A collect-all call ([`Client::who_has_access`](crate::Client::who_has_access),
+    /// [`Client::list_access`](crate::Client::list_access)) found more than
+    /// its `max_results` cap (default 10,000). Nothing beyond `max_results + 1`
+    /// items was fetched. Use the streaming form
+    /// ([`Client::who_has_access_stream`](crate::Client::who_has_access_stream),
+    /// [`Client::list_access_stream`](crate::Client::list_access_stream)) or
+    /// raise `max_results`.
+    #[error("{message}")]
+    #[non_exhaustive]
+    TooManyResults {
+        /// What happened and what to do instead.
+        message: String,
+        /// The cap that was exceeded.
+        max_results: usize,
+    },
+
     /// Any other API failure (e.g. `AlreadyExists`, `Internal`), or a
     /// response the SDK could not trust (then `status` is `None`).
     #[error("{message}")]
@@ -178,6 +194,15 @@ impl Error {
         Error::Validation {
             message: message.into(),
             status: None,
+        }
+    }
+
+    pub(crate) fn too_many_results(call: &str, stream: &str, max_results: usize) -> Self {
+        Error::TooManyResults {
+            message: format!(
+                "permio: {call} found more than {max_results} results; use {stream} to stream them, or raise max_results"
+            ),
+            max_results,
         }
     }
 
@@ -218,7 +243,7 @@ impl Error {
             | Error::Timeout { status, .. }
             | Error::RateLimited { status, .. } => Some(status),
             Error::Validation { status, .. } | Error::Other { status, .. } => status.as_deref(),
-            Error::Config { .. } | Error::Denied { .. } => None,
+            Error::Config { .. } | Error::Denied { .. } | Error::TooManyResults { .. } => None,
         }
     }
 
@@ -241,6 +266,7 @@ impl Error {
             | Error::Timeout { message, .. }
             | Error::RateLimited { message, .. }
             | Error::Denied { message, .. }
+            | Error::TooManyResults { message, .. }
             | Error::Other { message, .. } => message,
         }
     }
