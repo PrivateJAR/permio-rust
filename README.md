@@ -11,16 +11,6 @@ hierarchical resource-URI RBAC.
 
 ## Install
 
-The crate is not on crates.io yet. Until it is, depend on the repository:
-
-```toml
-[dependencies]
-permio = { git = "https://github.com/PrivateJAR/permio-rust", branch = "main" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-Once it is published:
-
 ```sh
 cargo add permio
 cargo add tokio --features macros,rt-multi-thread
@@ -369,7 +359,7 @@ toolchain whose cargo supports MSRV-aware resolution (1.84+; `resolver = "3"`
 picks versions compatible with `rust-version`) and commit it.
 
 The files under `src/permio/` and `src/pagination/` are generated from
-[PrivateJAR/proto](https://github.com/PrivateJAR/proto) (prost 0.14 / tonic
+[perms-io/proto](https://github.com/perms-io/proto) (prost 0.14 / tonic
 0.14); don't edit them by hand. The hand-written SDK is everything else.
 
 ## Releasing
