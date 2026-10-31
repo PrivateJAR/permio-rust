@@ -359,7 +359,7 @@ toolchain whose cargo supports MSRV-aware resolution (1.84+; `resolver = "3"`
 picks versions compatible with `rust-version`) and commit it.
 
 The files under `src/permio/` and `src/pagination/` are generated from
-[PrivateJAR/proto](https://github.com/PrivateJAR/proto) (prost 0.14 / tonic
+[perms-io/proto](https://github.com/perms-io/proto) (prost 0.14 / tonic
 0.14); don't edit them by hand. The hand-written SDK is everything else.
 
 ## Releasing

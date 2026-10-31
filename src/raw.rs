@@ -8,7 +8,7 @@
 //! retries.
 //!
 //! The files under `src/permio` and `src/pagination` are generated from the
-//! `PrivateJAR/proto` repository and must not be edited by hand. The module
+//! `perms-io/proto` repository and must not be edited by hand. The module
 //! tree mirrors the proto package names because the generated code refers to
 //! other packages with relative paths (`super::super::super::pagination`).
 #![allow(missing_docs, clippy::all, clippy::pedantic, rustdoc::all)]
